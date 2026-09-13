@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile app.py)",
+      "Bash(python -c \"print\\(repr\\(open\\('app.py', 'r', encoding='utf-8'\\).readlines\\(\\)[797]\\)\\)\")",
+      "Bash(python -c \"print\\(repr\\(open\\('app.py', 'r', encoding='utf-8'\\).readlines\\(\\)[82]\\)\\)\")",
+      "Bash(python -c ' *)"
+    ]
+  }
+}
