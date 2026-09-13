@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { ScoredStock } from '../types';
 import { REMOTE_METADATA_STATUS } from '../data/remoteArchiveData';
-import { startDataDownload, fetchDownloadProgress, searchUniverse } from '../api/client';
+import { startDataDownload, fetchDownloadProgress, searchUniverse, syncMetadata } from '../api/client';
 
 interface StockPoolViewProps {
   stocks: ScoredStock[];
@@ -41,6 +41,38 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   const [newName, setNewName] = useState('');
   const [newIndustry, setNewIndustry] = useState('电子核心部件');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
+  const [isSyncingMeta, setIsSyncingMeta] = useState(false);
+  const [syncMetaSuccess, setSyncMetaSuccess] = useState(false);
+  const [suggestions, setSuggestions] = useState<Array<{ symbol: string; name: string; market: string }>>([]);
+
+  const handleSyncMeta = async () => {
+    setIsSyncingMeta(true);
+    try {
+      await syncMetadata();
+      setSyncMetaSuccess(true);
+      setTimeout(() => setSyncMetaSuccess(false), 3000);
+    } catch (err) {
+      console.error('Meta sync error:', err);
+    } finally {
+      setIsSyncingMeta(false);
+    }
+  };
+
+  const handleSymbolChange = async (val: string) => {
+    setNewSymbol(val);
+    if (val.trim().length >= 2) {
+      const res = await searchUniverse(val.trim(), 5);
+      setSuggestions(res);
+    } else {
+      setSuggestions([]);
+    }
+  };
+
+  const handleSelectSuggestion = (item: { symbol: string; name: string; market: string }) => {
+    setNewSymbol(item.symbol);
+    setNewName(item.name);
+    setSuggestions([]);
+  };
 
   // Filtered stocks based on query & market
   const filteredStocks = useMemo(() => {
@@ -203,6 +235,21 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
               距今 9 天待同步
             </span>
           </div>
+
+          <button
+            onClick={handleSyncMeta}
+            disabled={isSyncingMeta}
+            className={`inline-flex items-center px-3 py-2 rounded-lg text-xs font-semibold shadow-xs transition-all cursor-pointer ${
+              isSyncingMeta 
+                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                : syncMetaSuccess
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-300'
+            }`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isSyncingMeta ? 'animate-spin' : ''}`} />
+            {isSyncingMeta ? '同步元数据中...' : syncMetaSuccess ? '元数据已对齐' : '同步行业与元数据'}
+          </button>
 
           <button
             onClick={handleDownloadAll}
@@ -429,14 +476,33 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   股票代码 (如 002169 或 600036)
                 </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="6位股票代码"
-                  value={newSymbol}
-                  onChange={(e) => setNewSymbol(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    placeholder="代码 / 拼音 / 名称模糊检索"
+                    value={newSymbol}
+                    onChange={(e) => handleSymbolChange(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                  />
+                  {suggestions.length > 0 && (
+                    <div className="absolute z-10 left-0 right-0 mt-1 bg-white rounded-lg border border-slate-200 shadow-lg max-h-48 overflow-y-auto">
+                      {suggestions.map((s) => (
+                        <div
+                          key={s.symbol}
+                          onClick={() => handleSelectSuggestion(s)}
+                          className="px-3 py-2 hover:bg-indigo-50 cursor-pointer text-xs flex items-center justify-between border-b border-slate-100 last:border-0"
+                        >
+                          <div>
+                            <span className="font-mono font-bold text-slate-900 mr-2">{s.symbol}</span>
+                            <span className="text-slate-700">{s.name}</span>
+                          </div>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{s.market}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div>
