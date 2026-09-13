@@ -194,3 +194,54 @@ def test_walk_forward_backtest_runs_and_reports_ic():
         for symbol in str(row["selected_symbols"]).split(","):
             limit = board_limit_threshold(symbol)
             assert float(day.loc[day["symbol"] == symbol, "daily_return"].iloc[0]) < limit
+
+
+def test_walk_forward_backtest_consecutive_periods_without_gaps():
+    """调仓期应严格连续，相邻调仓日之间无步长跨越跳空。"""
+    panel = make_panel({"600000": 10.0, "000001": 20.0, "300750": 50.0}, days=240, seed=15)
+    from stock_model.features import build_features
+
+    frame, features = build_features(panel, horizon=5)
+    periods, metrics = run_walk_forward_backtest(
+        frame, features, horizon=5, top_k=2, min_train_days=40, max_points=4,
+    )
+    assert len(periods) == 4
+    dates = pd.to_datetime(periods["date"]).tolist()
+    # 连续调仓期的交易日索引应严格相隔 horizon 天
+    calendar = sorted(pd.to_datetime(frame["date"]).unique())
+    indices = [calendar.index(d) for d in dates]
+    diffs = [indices[i+1] - indices[i] for i in range(len(indices) - 1)]
+    assert all(d == 5 for d in diffs), f"调仓日间隔不连续: {diffs}"
+
+
+def test_sentiment_scoring_bounds_and_damping():
+    from stock_model.sentiment import sentiment_from_frame
+
+    # 1. 只有1条温和正面新闻
+    df1 = pd.DataFrame([{"title": "某公司业务持续增长", "date": "2026-09-01"}])
+    res1 = sentiment_from_frame(df1, "000001", asof=pd.Timestamp("2026-09-02"))
+    assert 50 < res1["sentiment_score"] < 100
+
+    # 2. 10条平庸通稿不应无脑冲到100满分（阻尼与加权平均效果）
+    df10 = pd.DataFrame([{"title": "某公司业务持续增长", "date": "2026-09-01"}] * 10)
+    res10 = sentiment_from_frame(df10, "000001", asof=pd.Timestamp("2026-09-02"))
+    assert res10["sentiment_score"] < 95.0
+
+    # 3. 负面与澄清反转
+    df_neg = pd.DataFrame([{"title": "公司发布预亏公告，业绩暴跌", "date": "2026-09-01"}])
+    res_neg = sentiment_from_frame(df_neg, "000001", asof=pd.Timestamp("2026-09-02"))
+    assert res_neg["sentiment_score"] < 40.0
+
+
+def test_train_and_rank_model_wrapper_has_full_schema(tmp_path):
+    from stock_model.model import train_and_rank
+    from stock_model.features import build_features
+
+    # 动量因子剔除前120天，加综合研究需要100天，总计需至少220+天历史
+    panel = make_panel({"600000": 10.0, "000001": 20.0, "300750": 30.0}, days=240, seed=19)
+    frame, features = build_features(panel, horizon=5)
+    picks = train_and_rank(frame, features, top_k=2, horizon=5, output_dir=tmp_path)
+    assert "composite_score" in picks.columns
+    assert "model_score" in picks.columns
+    assert "score" in picks.columns
+    assert (tmp_path / "latest_picks.csv").exists()

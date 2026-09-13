@@ -60,8 +60,9 @@ def load_benchmark_history(
         except Exception as error:
             errors.append(f"东方财富第{attempt + 1}次：{error}")
         try:
+            prefix = "sz" if str(code).startswith("399") else "sh"
             raw = ak.stock_zh_index_daily_tx(
-                symbol=f"sh{code}",
+                symbol=f"{prefix}{code}",
                 start_date=start_date.strftime("%Y%m%d"), end_date=end_date.strftime("%Y%m%d"),
             )
             fresh = _normalize_index_history(raw, code)

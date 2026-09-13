@@ -111,11 +111,12 @@ def score_snapshot(snapshot: pd.DataFrame, model_prediction: pd.Series, sentimen
         + _date_rank(scored, "sma_20_ratio") * 0.20
         + _date_rank(scored, "vol_20", False) * 0.20
     )
+    vwap_or_ret = _date_rank(scored, "vwap_dev") if "vwap_dev" in scored.columns else _date_rank(scored, "ret_20")
     scored["volume_price_score"] = (
-        _date_rank(scored, "ret_20") * 0.35
-        + _date_rank(scored, "volume_ratio_20") * 0.25
-        + _date_rank(scored, "obv_slope_20") * 0.20
-        + _date_rank(scored, "money_flow_20") * 0.20
+        _date_rank(scored, "volume_ratio_20") * 0.30
+        + _date_rank(scored, "obv_slope_20") * 0.25
+        + _date_rank(scored, "money_flow_20") * 0.25
+        + vwap_or_ret * 0.20
     )
     scored["candle_score"] = (
         _date_rank(scored, "close_position") * 0.35
@@ -598,8 +599,11 @@ def run_walk_forward_backtest(frame: pd.DataFrame, features: list[str], horizon:
     if len(dates) <= min_train_days + 2 * horizon:
         raise ValueError(f"有效交易日不足，至少需要 {min_train_days + horizon + 1} 天")
     candidate_dates = dates[min_train_days + horizon:-(horizon + 1):horizon]
-    step = max(1, int(np.ceil(len(candidate_dates) / max(max_points, 1))))
-    planned_dates = candidate_dates[::step]
+    # 保持连续非重叠调仓期，杜绝步长跨度跳空导致的时间断层与复利虚高
+    if max_points and len(candidate_dates) > max_points:
+        planned_dates = candidate_dates[-max_points:]
+    else:
+        planned_dates = candidate_dates
     records: list[dict[str, object]] = []
     previous_symbols: set[str] = set()
     previous_baselines = {
@@ -619,17 +623,40 @@ def run_walk_forward_backtest(frame: pd.DataFrame, features: list[str], horizon:
         current_date = pd.Timestamp(current_date)
         cutoff = embargo_cutoff(dates, current_date, horizon)
         train = labeled[labeled["date"] < cutoff]
-        snapshot_all = frame[frame["date"] == current_date].dropna(subset=features).copy()
-        if train["date"].nunique() < min_train_days or snapshot_all.empty:
+        day_all = frame[frame["date"] == current_date].copy()
+        snapshot_all = day_all.dropna(subset=features).copy()
+        if train["date"].nunique() < min_train_days or (snapshot_all.empty and not previous_symbols):
             continue
         sellable_symbols = set(
-            snapshot_all.loc[tradable_exit_at_next_open(snapshot_all), "symbol"].astype(str).str.zfill(6)
-        )
+            day_all.loc[tradable_exit_at_next_open(day_all), "symbol"].astype(str).str.zfill(6)
+        ) if not day_all.empty else set()
         forced_symbols = previous_symbols - sellable_symbols
         forced_baselines = {
             name: symbols - sellable_symbols for name, symbols in previous_baselines.items()
         }
         all_forced = set(forced_symbols).union(*(forced_baselines.values()))
+        # 停牌或缺失特征的受困持仓必须保留在候选池中连续估值，不可直接从组合中抹除
+        missing_forced = all_forced - set(snapshot_all["symbol"].astype(str).str.zfill(6))
+        if missing_forced:
+            forced_rows = day_all[day_all["symbol"].astype(str).str.zfill(6).isin(missing_forced)].copy()
+            absent_forced = missing_forced - set(forced_rows["symbol"].astype(str).str.zfill(6))
+            if absent_forced:
+                synthetic = pd.DataFrame([
+                    {"date": current_date, "symbol": sym, "future_return": 0.0, "amount_ma20": 0.0}
+                    for sym in absent_forced
+                ])
+                forced_rows = pd.concat([forced_rows, synthetic], ignore_index=True)
+            for feat in features:
+                if feat not in forced_rows:
+                    forced_rows[feat] = 0.5
+                else:
+                    forced_rows[feat] = forced_rows[feat].fillna(0.5)
+            if "future_return" not in forced_rows:
+                forced_rows["future_return"] = 0.0
+            else:
+                forced_rows["future_return"] = forced_rows["future_return"].fillna(0.0)
+            snapshot_all = pd.concat([snapshot_all, forced_rows], ignore_index=True)
+
         snapshot_symbols = snapshot_all["symbol"].astype(str).str.zfill(6)
         buy_eligible = pd.Series(True, index=snapshot_all.index)
         if exclude_limit_up:
@@ -988,7 +1015,7 @@ def run_latest_research(frame: pd.DataFrame, features: list[str], top_k: int, ho
     # SHAP 解释（模型可解释性增强）
     try:
         import shap
-        X_train = train[features].values
+        X_train = model_matrix(train, features).values
         explainer = shap.TreeExplainer(estimator)
         shap_values = explainer.shap_values(X_train)
         importance = pd.DataFrame({

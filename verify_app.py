@@ -1,3 +1,13 @@
+from __future__ import annotations
+
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from streamlit.testing.v1 import AppTest
 
 VIEWS = ["研究看板", "股票池与数据", "综合评分", "历史回测", "研究记录"]

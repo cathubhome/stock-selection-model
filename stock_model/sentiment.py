@@ -39,7 +39,7 @@ DEDUP_SIMILARITY = 0.8
 
 
 def title_net_score(text: object) -> float:
-    """单条标题的情绪净值：正面强度和 − 负面强度和，含否定反转处理。"""
+    """单条标题的情绪净值：正面强度和 - 负面强度和，含否定反转处理。"""
     value = str(text or "")
     positive = sum(weight for word, weight in POSITIVE_WORDS.items() if word in value)
     negative = sum(weight for word, weight in NEGATIVE_WORDS.items() if word in value)
@@ -103,7 +103,12 @@ def sentiment_from_frame(frame: pd.DataFrame, symbol: str, asof: pd.Timestamp | 
     effective = int((weights * nets.abs() > 0).sum())
     if effective == 0:
         return {"symbol": symbol, "sentiment_score": 50.0, "sentiment_source": "无新闻/中性", "news_count": int(len(titles))}
-    net = float((nets * weights).sum() / weights.clip(lower=0.2).mean())
+    total_weight = float(weights.sum())
+    if total_weight <= 0:
+        return {"symbol": symbol, "sentiment_score": 50.0, "sentiment_source": "无新闻/中性", "news_count": int(len(titles))}
+    raw_net = float((nets * weights).sum() / max(total_weight, 0.5))
+    coverage_damping = min(1.0, float(np.log1p(effective) / np.log1p(3)))
+    net = raw_net * coverage_damping
     return {
         "symbol": symbol,
         "sentiment_score": float(np.clip(50 + 18 * net, 0, 100)),
