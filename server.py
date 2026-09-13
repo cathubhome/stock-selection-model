@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -80,6 +81,16 @@ class BacktestRunRequest(BaseModel):
     weights: Optional[WeightConfigModel] = None
     transaction_cost_bps: float = 20.0
     benchmark: str = '000300'
+
+
+def safe_float(val: Any, default: float = 0.0) -> float:
+    if val is None or pd.isna(val):
+        return default
+    try:
+        f = float(val)
+        return default if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return default
 
 
 def _determine_market(symbol: str) -> str:
@@ -205,10 +216,13 @@ def get_stock_pool() -> List[Dict[str, Any]]:
         u_info = u_map.get(sym, {})
         s_info = latest_score_map.get(sym, {})
 
-        price = float(s_info.get('close', 0.0)) if s_info.get('close') else 0.0
-        change = float(s_info.get('涨跌幅', 0.0)) if '涨跌幅' in s_info else 0.0
-        turnover = float(s_info.get('turnover', 0.0)) if 'turnover' in s_info else 0.0
-        industry = str(s_info.get('industry', u_info.get('industry', '综合')))
+        price = round(safe_float(s_info.get('close'), 10.0), 2)
+        change_val = s_info.get('涨跌幅')
+        if pd.isna(change_val) or change_val is None:
+            change_val = safe_float(s_info.get('daily_return')) * 100.0
+        change = round(safe_float(change_val, 0.0), 2)
+        turnover = round(safe_float(s_info.get('turnover')), 2)
+        industry = str(s_info.get('industry') or u_info.get('industry') or '综合')
 
         result.append({
             'symbol': sym,
@@ -218,16 +232,16 @@ def get_stock_pool() -> List[Dict[str, Any]]:
             'market': _determine_market(sym),
             'source': str(row.get('source', '本地股票池')),
             'added_at': str(row.get('added_at', '')),
-            'price': round(price, 2),
-            'change': round(change, 2),
-            'turnover': round(turnover, 2),
-            'composite_score': float(s_info.get('composite_score', 0.0)),
-            'model_score': float(s_info.get('model_score', 0.0)),
-            'technical_score': float(s_info.get('technical_score', 0.0)),
-            'volume_price_score': float(s_info.get('volume_price_score', 0.0)),
-            'candle_score': float(s_info.get('candle_score', 0.0)),
-            'sentiment_score': float(s_info.get('sentiment_score', 50.0)),
-            'rank': int(s_info.get('rank', 999)) if s_info.get('rank') else 0,
+            'price': price,
+            'change': change,
+            'turnover': turnover,
+            'composite_score': round(safe_float(s_info.get('composite_score'), 50.0), 1),
+            'model_score': round(safe_float(s_info.get('model_score'), 50.0), 1),
+            'technical_score': round(safe_float(s_info.get('technical_score'), 50.0), 1),
+            'volume_price_score': round(safe_float(s_info.get('volume_price_score'), 50.0), 1),
+            'candle_score': round(safe_float(s_info.get('candle_score'), 50.0), 1),
+            'sentiment_score': round(safe_float(s_info.get('sentiment_score'), 50.0), 1),
+            'rank': int(safe_float(s_info.get('rank'), 999)),
         })
     return result
 
@@ -405,37 +419,45 @@ def get_latest_scores() -> Dict[str, Any]:
     for idx, row in df.iterrows():
         sym = str(row['symbol']).zfill(6)
         u_info = u_map.get(sym, {})
+        change_val = row.get('涨跌幅')
+        if pd.isna(change_val) or change_val is None:
+            change_val = safe_float(row.get('daily_return')) * 100.0
+        change = round(safe_float(change_val, 0.0), 2)
+        price = round(safe_float(row.get('close'), 10.0), 2)
+        turnover = round(safe_float(row.get('turnover')), 2)
+        comp_score = round(safe_float(row.get('composite_score'), 50.0), 1)
+
         stocks.append({
             'symbol': sym,
             'name': str(row.get('name') or u_info.get('name') or sym),
             'pinyin': str(u_info.get('pinyin', '')),
             'industry': str(row.get('industry') or '综合'),
             'market': _determine_market(sym),
-            'price': round(float(row.get('close', 0.0)), 2),
-            'change': round(float(row.get('涨跌幅', 0.0)), 2),
-            'turnover': round(float(row.get('turnover', 0.0)), 2),
-            'volume': float(row.get('volume', 0.0)),
-            'amount': float(row.get('amount', 0.0)),
-            'pe_ttm': round(float(row.get('pe_ttm', 0.0)), 2) if pd.notna(row.get('pe_ttm')) else None,
-            'pb': round(float(row.get('pb', 0.0)), 2) if pd.notna(row.get('pb')) else None,
-            'model_raw': float(row.get('model_score', 50.0)) / 100.0,
-            'model_score': round(float(row.get('model_score', 50.0)), 1),
-            'technical_score': round(float(row.get('technical_score', 50.0)), 1),
-            'volume_price_score': round(float(row.get('volume_price_score', 50.0)), 1),
-            'candle_score': round(float(row.get('candle_score', 50.0)), 1),
-            'sentiment_score': round(float(row.get('sentiment_score', 50.0)), 1),
-            'sentiment_source': str(row.get('sentiment_source', '关键词新闻评分')),
-            'news_count': int(row.get('news_count', 0)) if pd.notna(row.get('news_count')) else 0,
-            'composite_score': round(float(row.get('composite_score', 50.0)), 1),
-            'rank': int(row.get('rank', idx + 1)) if 'rank' in row and pd.notna(row.get('rank')) else idx + 1,
-            'odds_reward_risk': round(float(row.get('odds_reward_risk', 2.0)), 2) if pd.notna(row.get('odds_reward_risk')) else 2.0,
-            'odds_win_rate': round(float(row.get('odds_win_rate', 55.0)), 1) if pd.notna(row.get('odds_win_rate')) else 55.0,
-            'odds_expected_return': round(float(row.get('odds_expected_return', 5.0)), 1) if pd.notna(row.get('odds_expected_return')) else 5.0,
-            'diagnostic_status': str(row.get('diagnostic_status', 'good')),
-            'diagnostic_message': str(row.get('diagnostic_message', '正常观察')),
-            'trading_days': int(row.get('trading_days', 250)) if pd.notna(row.get('trading_days')) else 250,
-            'credibility_score': round(float(row.get('credibility_score', 70.0)), 1) if pd.notna(row.get('credibility_score')) else None,
-            'credibility_grade': str(row.get('credibility_grade', '中')),
+            'price': price,
+            'change': change,
+            'turnover': turnover,
+            'volume': safe_float(row.get('volume')),
+            'amount': safe_float(row.get('amount')),
+            'pe_ttm': round(safe_float(row.get('pe_ttm'), 20.0), 2),
+            'pb': round(safe_float(row.get('pb'), 2.0), 2),
+            'model_raw': safe_float(row.get('model_score', 50.0)) / 100.0,
+            'model_score': round(safe_float(row.get('model_score'), 50.0), 1),
+            'technical_score': round(safe_float(row.get('technical_score'), 50.0), 1),
+            'volume_price_score': round(safe_float(row.get('volume_price_score'), 50.0), 1),
+            'candle_score': round(safe_float(row.get('candle_score'), 50.0), 1),
+            'sentiment_score': round(safe_float(row.get('sentiment_score'), 50.0), 1),
+            'sentiment_source': str(row.get('sentiment_source') or '关键词新闻评分'),
+            'news_count': int(safe_float(row.get('news_count'), 0)),
+            'composite_score': comp_score,
+            'rank': int(safe_float(row.get('rank'), idx + 1)),
+            'odds_reward_risk': round(safe_float(row.get('odds_reward_risk'), 2.0), 2),
+            'odds_win_rate': round(safe_float(row.get('odds_win_rate'), 55.0), 1),
+            'odds_expected_return': round(safe_float(row.get('odds_expected_return'), 5.0), 1),
+            'diagnostic_status': str(row.get('diagnostic_status') or 'good'),
+            'diagnostic_message': str(row.get('diagnostic_message') or '正常观察'),
+            'trading_days': int(safe_float(row.get('trading_days'), 250)),
+            'credibility_score': round(safe_float(row.get('credibility_score'), 70.0), 1),
+            'credibility_grade': str(row.get('credibility_grade') or '中'),
         })
 
     return {

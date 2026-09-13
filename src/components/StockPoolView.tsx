@@ -403,21 +403,21 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                       </span>
                     </td>
                     <td className="py-3 px-4 font-semibold text-slate-900">
-                      ¥{stock.price.toFixed(2)}
+                      ¥{(Number(stock.price) || 0).toFixed(2)}
                     </td>
                     <td className="py-3 px-4">
-                      <span className={`font-semibold ${stock.change >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        {stock.change >= 0 ? `+${stock.change.toFixed(2)}%` : `${stock.change.toFixed(2)}%`}
+                      <span className={`font-semibold ${(Number(stock.change) || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {(Number(stock.change) || 0) >= 0 ? `+${(Number(stock.change) || 0).toFixed(2)}%` : `${(Number(stock.change) || 0).toFixed(2)}%`}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-slate-700">
-                      {stock.turnover.toFixed(2)}%
+                      {(Number(stock.turnover) || 0).toFixed(2)}%
                     </td>
                     <td className="py-3 px-4 text-slate-700">
-                      {(stock.amount / 100000000).toFixed(2)} 亿
+                      {((Number(stock.amount) || 0) / 100000000).toFixed(2)} 亿
                     </td>
                     <td className="py-3 px-4 text-slate-700">
-                      {stock.pe_ttm.toFixed(1)}
+                      {stock.pe_ttm != null ? Number(stock.pe_ttm).toFixed(1) : '--'}
                     </td>
                     <td className="py-3 px-4 text-slate-500 text-[11px]">
                       {stock.source || '历史对话提取'}

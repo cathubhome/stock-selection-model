@@ -299,18 +299,18 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
                   </td>
                   <td className="py-3 px-4 text-slate-600">{stock.industry}</td>
                   <td className="py-3 px-4">
-                    <span className="font-semibold text-slate-900">¥{stock.price.toFixed(2)}</span>
-                    <span className={`ml-1.5 text-[11px] font-medium ${stock.change >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {stock.change >= 0 ? `+${stock.change.toFixed(2)}%` : `${stock.change.toFixed(2)}%`}
+                    <span className="font-semibold text-slate-900">¥{(Number(stock.price) || 0).toFixed(2)}</span>
+                    <span className={`ml-1.5 text-[11px] font-medium ${(Number(stock.change) || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {(Number(stock.change) || 0) >= 0 ? `+${(Number(stock.change) || 0).toFixed(2)}%` : `${(Number(stock.change) || 0).toFixed(2)}%`}
                     </span>
                   </td>
                   <td className="py-3 px-4">
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-indigo-100 text-indigo-800">
-                      {stock.composite_score.toFixed(1)}
+                      {(Number(stock.composite_score) || 0).toFixed(1)}
                     </span>
                   </td>
                   <td className="py-3 px-4 font-mono text-[11px] text-slate-600">
-                    {stock.model_score.toFixed(0)} / {stock.technical_score.toFixed(0)} / {stock.volume_price_score.toFixed(0)} / {stock.candle_score.toFixed(0)} / {stock.sentiment_score.toFixed(0)}
+                    {(Number(stock.model_score) || 0).toFixed(0)} / {(Number(stock.technical_score) || 0).toFixed(0)} / {(Number(stock.volume_price_score) || 0).toFixed(0)} / {(Number(stock.candle_score) || 0).toFixed(0)} / {(Number(stock.sentiment_score) || 0).toFixed(0)}
                   </td>
                   <td className="py-3 px-4">
                     <span className="text-slate-800 font-medium">{stock.odds_win_rate}%</span>

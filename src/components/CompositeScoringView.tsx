@@ -480,9 +480,9 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       {tableView === '决策' && (
                         <>
                           <td className="py-2.5 px-3">
-                            <span className="font-semibold text-slate-800">¥{stock.price.toFixed(2)}</span>
-                            <span className={`ml-1 text-[10px] ${stock.change >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                              {stock.change >= 0 ? `+${stock.change.toFixed(2)}%` : `${stock.change.toFixed(2)}%`}
+                            <span className="font-semibold text-slate-800">¥{(Number(stock.price) || 0).toFixed(2)}</span>
+                            <span className={`ml-1 text-[10px] ${(Number(stock.change) || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                              {(Number(stock.change) || 0) >= 0 ? `+${(Number(stock.change) || 0).toFixed(2)}%` : `${(Number(stock.change) || 0).toFixed(2)}%`}
                             </span>
                           </td>
                           <td className="py-2.5 px-3">
@@ -556,7 +556,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    最新价 ¥{activeStock.price.toFixed(2)} · 换手率 {activeStock.turnover.toFixed(2)}% · PE {activeStock.pe_ttm.toFixed(1)}
+                    最新价 ¥{(Number(activeStock.price) || 0).toFixed(2)} · 换手率 {(Number(activeStock.turnover) || 0).toFixed(2)}% · PE {activeStock.pe_ttm != null ? Number(activeStock.pe_ttm).toFixed(1) : '--'}
                   </p>
                 </div>
 
@@ -581,7 +581,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div className="bg-indigo-600 h-full" style={{ width: `${activeStock.model_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{activeStock.model_score.toFixed(0)}</span>
+                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.model_score) || 0).toFixed(0)}</span>
                     </div>
                   </div>
 
@@ -594,7 +594,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div className="bg-blue-600 h-full" style={{ width: `${activeStock.technical_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{activeStock.technical_score.toFixed(0)}</span>
+                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.technical_score) || 0).toFixed(0)}</span>
                     </div>
                   </div>
 
@@ -607,7 +607,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div className="bg-emerald-600 h-full" style={{ width: `${activeStock.volume_price_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{activeStock.volume_price_score.toFixed(0)}</span>
+                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.volume_price_score) || 0).toFixed(0)}</span>
                     </div>
                   </div>
 
@@ -620,7 +620,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div className="bg-amber-500 h-full" style={{ width: `${activeStock.candle_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{activeStock.candle_score.toFixed(0)}</span>
+                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.candle_score) || 0).toFixed(0)}</span>
                     </div>
                   </div>
 
@@ -633,7 +633,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                         <div className="bg-purple-600 h-full" style={{ width: `${activeStock.sentiment_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{activeStock.sentiment_score.toFixed(0)}</span>
+                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.sentiment_score) || 0).toFixed(0)}</span>
                     </div>
                   </div>
                 </div>
