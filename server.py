@@ -26,6 +26,17 @@ from stock_model.research import (
     run_latest_research,
     run_walk_forward_backtest,
 )
+from stock_model.export import candidate_export_workbook, export_pdf_report
+from stock_model.pool import parse_pool_text
+from stock_model.governance import assess_research_status
+from stock_model.quality import audit_market_data
+from stock_model.metadata import (
+    load_metadata_history,
+    load_universe_history,
+    metadata_history_audit,
+    universe_history_audit,
+)
+from fastapi.responses import Response
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
@@ -58,6 +69,11 @@ _TASK_LOCK = threading.Lock()
 class PoolAddRequest(BaseModel):
     symbols: List[str] = Field(..., description='List of stock symbols to add')
     source: str = Field(default='Web界面添加', description='Source description')
+
+
+class PoolBatchRequest(BaseModel):
+    text: str = Field(..., description='Multiline text with symbols or watchlist paste')
+    source: str = Field(default='批量粘贴导入', description='Source description')
 
 
 class WeightConfigModel(BaseModel):
@@ -259,6 +275,21 @@ def add_stocks_to_pool(payload: PoolAddRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f'Failed to add stocks: {exc}')
 
 
+@app.post('/api/pool/batch')
+def batch_add_stocks(payload: PoolBatchRequest) -> Dict[str, Any]:
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail='导入文本内容不能为空')
+    universe = _load_universe_df()
+    parsed = parse_pool_text(payload.text, universe=universe)
+    if parsed.empty:
+        raise HTTPException(status_code=400, detail='未能从粘贴文本中识别到有效的A股股票代码（例如：300476 或 600519）')
+    try:
+        updated = add_to_pool(POOL_PATH, parsed, source=payload.source)
+        return {'ok': True, 'added': len(parsed), 'total': len(updated), 'symbols': parsed['symbol'].tolist()}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'批量导入失败: {exc}')
+
+
 @app.delete('/api/pool/{symbol}')
 def remove_stock_from_pool(symbol: str) -> Dict[str, Any]:
     sym = symbol.strip().zfill(6)
@@ -392,6 +423,28 @@ def sync_metadata() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f'Failed to sync metadata: {exc}')
 
 
+@app.post('/api/data/repair-quality')
+def repair_data_quality() -> Dict[str, Any]:
+    symbols = get_symbols(POOL_PATH)
+    if not symbols:
+        raise HTTPException(status_code=400, detail='股票池为空')
+    panel = load_panel(RAW_DATA_DIR, symbols)
+    if panel.empty:
+        raise HTTPException(status_code=400, detail='未找到行情数据')
+    quality_report, quality_summary = audit_market_data(panel)
+    repair_symbols = quality_report[quality_report['status'] == '需修复']['symbol'].astype(str).tolist()
+    if not repair_symbols:
+        return {'ok': True, 'repaired': 0, 'symbols': [], 'message': '当前所有股票数据质量正常，无须修复'}
+    now = datetime.now()
+    end_str = now.strftime('%Y%m%d')
+    start_str = f'{now.year - 4}0101'
+    try:
+        update_histories(RAW_DATA_DIR, repair_symbols, start=start_str, end=end_str)
+        return {'ok': True, 'repaired': len(repair_symbols), 'symbols': repair_symbols, 'message': f'成功修复并重新下载 {len(repair_symbols)} 只股票'}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'修复下载失败: {exc}')
+
+
 @app.get('/api/scores/latest')
 def get_latest_scores() -> Dict[str, Any]:
     scores_file = OUTPUT_DIR / 'latest_scores.csv'
@@ -458,6 +511,18 @@ def get_latest_scores() -> Dict[str, Any]:
             'trading_days': int(safe_float(row.get('trading_days'), 250)),
             'credibility_score': round(safe_float(row.get('credibility_score'), 70.0), 1),
             'credibility_grade': str(row.get('credibility_grade') or '中'),
+            'credibility_stability': round(safe_float(row.get('credibility_stability'), 80.0), 1),
+            'credibility_agreement': round(safe_float(row.get('credibility_agreement'), 75.0), 1),
+            'high_52w': round(safe_float(row.get('high_52w'), price * 1.3), 2),
+            'low_52w': round(safe_float(row.get('low_52w'), price * 0.7), 2),
+            'positive_evidences': [
+                f'综合评分 {comp_score:.1f}，进入本次前向观察名单',
+                f'多因子模型排序分 {round(safe_float(row.get("model_score"), 50.0), 1)}',
+            ],
+            'negative_evidences': [
+                '请严格控制单笔仓位与调仓滑点摩擦',
+                '历史回测表现不代表未来真实收益',
+            ],
         })
 
     return {
@@ -491,13 +556,7 @@ def run_scoring(payload: ScoringRunRequest) -> Dict[str, Any]:
         fetch_sentiment=payload.fetch_sentiment,
     )
 
-    return {
-        'ok': True,
-        'top_k': payload.top_k,
-        'horizon': payload.horizon,
-        'picks_count': len(picks),
-        'validation_metrics': metrics,
-    }
+    return get_latest_scores()
 
 
 @app.get('/api/backtest/latest')
@@ -591,6 +650,221 @@ def run_backtest(payload: BacktestRunRequest) -> Dict[str, Any]:
     )
 
     return get_latest_backtest()
+
+
+@app.get('/api/export/excel')
+def export_candidate_excel() -> Response:
+    picks_file = OUTPUT_DIR / 'latest_picks.csv'
+    if not picks_file.exists():
+        raise HTTPException(status_code=404, detail='尚未生成候选股票名单，请先运行综合评分')
+    try:
+        df_picks = pd.read_csv(picks_file, dtype={'symbol': str})
+        universe = _load_universe_df()
+        if not universe.empty and ('name' not in df_picks.columns or df_picks['name'].isna().any()):
+            names = universe[['symbol', 'name']].drop_duplicates('symbol')
+            df_picks = df_picks.drop(columns=['name'], errors='ignore').merge(names, on='symbol', how='left').fillna('')
+        excel_bytes = candidate_export_workbook(df_picks)
+        today_str = datetime.now().strftime('%Y%m%d')
+        filename = f'candidate_picks_{today_str}.xlsx'
+        return Response(
+            content=excel_bytes,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'生成Excel失败: {exc}')
+
+
+@app.get('/api/export/pdf')
+def export_candidate_pdf() -> Response:
+    picks_file = OUTPUT_DIR / 'latest_picks.csv'
+    if not picks_file.exists():
+        raise HTTPException(status_code=404, detail='尚未生成候选股票名单，请先运行综合评分')
+    try:
+        df_picks = pd.read_csv(picks_file, dtype={'symbol': str})
+        universe = _load_universe_df()
+        if not universe.empty and ('name' not in df_picks.columns or df_picks['name'].isna().any()):
+            names = universe[['symbol', 'name']].drop_duplicates('symbol')
+            df_picks = df_picks.drop(columns=['name'], errors='ignore').merge(names, on='symbol', how='left').fillna('')
+
+        bt_metrics = {}
+        metrics_file = OUTPUT_DIR / 'backtest_metrics.json'
+        if metrics_file.exists():
+            try:
+                bt_metrics = json.loads(metrics_file.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+
+        importance_df = pd.DataFrame()
+        imp_file = OUTPUT_DIR / 'latest_importance.csv'
+        if imp_file.exists():
+            try:
+                importance_df = pd.read_csv(imp_file)
+            except Exception:
+                pass
+
+        pdf_bytes = export_pdf_report(df_picks, backtest_metrics=bt_metrics, importance=importance_df)
+        today_str = datetime.now().strftime('%Y%m%d')
+        filename = f'research_report_{today_str}.pdf'
+        return Response(
+            content=pdf_bytes,
+            media_type='application/pdf',
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'生成PDF报告失败: {exc}')
+
+
+@app.get('/api/export/backtest-csv')
+def export_backtest_csv() -> Response:
+    periods_file = OUTPUT_DIR / 'backtest_periods.csv'
+    if not periods_file.exists():
+        raise HTTPException(status_code=404, detail='尚未生成回测明细，请先运行历史回测')
+    try:
+        content = periods_file.read_bytes()
+        today_str = datetime.now().strftime('%Y%m%d')
+        filename = f'backtest_periods_{today_str}.csv'
+        return Response(
+            content=content,
+            media_type='text/csv; charset=utf-8-sig',
+            headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'导出回测CSV失败: {exc}')
+
+
+@app.get('/api/governance/status')
+def get_governance_status() -> Dict[str, Any]:
+    metrics_file = OUTPUT_DIR / 'backtest_metrics.json'
+    bt = {}
+    if metrics_file.exists():
+        try:
+            bt = json.loads(metrics_file.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+
+    val = bt.get('validation_metrics', {})
+    metadata_hist = load_metadata_history(ARCHIVE_DATA_DIR)
+    univ_hist = load_universe_history(ARCHIVE_DATA_DIR)
+    meta_audit = metadata_history_audit(metadata_hist, bt.get('start_date'), bt.get('end_date'))
+    univ_audit = universe_history_audit(univ_hist, bt.get('start_date'), bt.get('end_date'))
+
+    status = assess_research_status(bt, val, meta_audit, univ_audit)
+
+    ic_low = bt.get('ic_confidence_low')
+    excess = safe_float(bt.get('cumulative_excess_return'), 0.0)
+    periods_count = int(safe_float(bt.get('periods'), 0))
+    q5_q1 = safe_float(bt.get('q5_q1_mean_return'), 0.0)
+    win_rate = safe_float(bt.get('excess_win_rate', bt.get('win_rate')), 0.0)
+    val_r2 = safe_float(val.get('r2'), -1.0)
+    pos_year = safe_float(bt.get('positive_year_ratio'), 0.0)
+
+    rows = [
+        {
+            'level': '核心',
+            'name': '样本外调仓期数 (Periods)',
+            'current': f'{periods_count} 期',
+            'threshold': '>= 36 期',
+            'passed': periods_count >= 36,
+            'desc': '非重叠样本外滚动验证期数，防范小样本虚假过拟合',
+        },
+        {
+            'level': '核心',
+            'name': '扣费后累计超额收益',
+            'current': f'{excess * 100:.2f}%',
+            'threshold': '> 0%',
+            'passed': excess > 0,
+            'desc': '扣减印花税、佣金及滑点冲击摩擦后的净超额',
+        },
+        {
+            'level': '核心',
+            'name': 'Rank IC 95%置信区间下界',
+            'current': f'{float(ic_low):.4f}' if ic_low is not None else '--',
+            'threshold': '> 0',
+            'passed': ic_low is not None and float(ic_low) > 0,
+            'desc': '横截面预测排序相关性下界，排斥偶发拟合',
+        },
+        {
+            'level': '核心',
+            'name': '分层收益差 (Q5 - Q1)',
+            'current': f'{q5_q1 * 100:.2f}%',
+            'threshold': '> 0%',
+            'passed': q5_q1 > 0,
+            'desc': '最高评分组相对最低评分组的单调收益利差',
+        },
+        {
+            'level': '核心',
+            'name': '超额收益胜率',
+            'current': f'{win_rate * 100:.1f}%',
+            'threshold': '> 50%',
+            'passed': win_rate > 0.5,
+            'desc': '半数以上调仓期跑赢对应基准',
+        },
+        {
+            'level': '核心',
+            'name': '验证集拟合优度 (R^2)',
+            'current': f'{val_r2:.4f}' if val_r2 > -0.99 else '--',
+            'threshold': '> 0',
+            'passed': val_r2 > 0,
+            'desc': '样本外验证集解释力必须严格为正',
+        },
+        {
+            'level': '稳健',
+            'name': '正收益年度占比',
+            'current': f'{pos_year * 100:.1f}%',
+            'threshold': '>= 75%',
+            'passed': pos_year >= 0.75,
+            'desc': '跨年度超额收益稳定性',
+        },
+        {
+            'level': '稳健',
+            'name': '稳健样本期数',
+            'current': f'{periods_count} 期',
+            'threshold': '>= 60 期',
+            'passed': periods_count >= 60,
+            'desc': '严苛稳健验证所需的样本量要求',
+        },
+    ]
+
+    return {
+        'passed': bool(status.get('passed', False)),
+        'label': str(status.get('label', '未验证')),
+        'failed_reasons': status.get('failed_reasons', []),
+        'warnings': status.get('warnings', []),
+        'checks': rows,
+    }
+
+
+@app.get('/api/runs/{run_id}')
+def get_research_run_detail(run_id: str) -> Dict[str, Any]:
+    run_dir = OUTPUT_DIR / 'runs' / run_id
+    if run_dir.exists() and run_dir.is_dir():
+        manifest_file = run_dir / 'manifest.json'
+        picks_file = run_dir / 'picks.csv'
+        manifest = {}
+        picks = []
+        if manifest_file.exists():
+            try:
+                manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+        if picks_file.exists():
+            try:
+                df = pd.read_csv(picks_file, dtype={'symbol': str})
+                picks = df.head(15).to_dict(orient='records')
+            except Exception:
+                pass
+        return {'run_id': run_id, 'manifest': manifest, 'picks': picks}
+
+    json_file = OUTPUT_DIR / 'runs' / f'{run_id}.json'
+    if json_file.exists():
+        try:
+            data = json.loads(json_file.read_text(encoding='utf-8'))
+            return {'run_id': run_id, 'manifest': data, 'picks': data.get('picks', [])}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f'Failed to read run: {exc}')
+
+    raise HTTPException(status_code=404, detail=f'Run {run_id} not found')
 
 
 @app.get('/api/runs')

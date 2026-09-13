@@ -1,3 +1,15 @@
+
+const safeNum = (val: any, fallback = 0): number => {
+  const n = typeof val === 'number' ? val : Number(val);
+  return isNaN(n) ? fallback : n;
+};
+
+const fmtNum = (val: any, digits = 2, fallback = '--'): string => {
+  if (val === null || val === undefined) return fallback;
+  const n = typeof val === 'number' ? val : Number(val);
+  if (isNaN(n)) return fallback;
+  return n.toFixed(digits);
+};
 import React, { useState, useMemo } from 'react';
 import { 
   Sliders, 
@@ -22,6 +34,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { ScoredStock, WeightConfig } from '../types';
+import { downloadCandidateExcel, downloadResearchReportPdf } from '../api/client';
+import { FileText, Download } from 'lucide-react';
 import { DEFAULT_WEIGHTS } from '../utils/scoring';
 
 interface CompositeScoringViewProps {
@@ -188,11 +202,29 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
           </button>
 
           <button
+            onClick={downloadCandidateExcel}
+            className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 transition-colors shadow-xs cursor-pointer"
+            title="导出多工作表Excel（含候选明细及量化指标字典说明）"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+            导出候选明细 (Excel)
+          </button>
+
+          <button
+            onClick={downloadResearchReportPdf}
+            className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 transition-colors shadow-xs cursor-pointer"
+            title="导出A4规格完整量化投研报告PDF"
+          >
+            <FileText className="w-3.5 h-3.5 mr-1 text-rose-600" />
+            导出研究报告 (PDF)
+          </button>
+
+          <button
             onClick={handleExportCSV}
             className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-medium bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 transition-colors shadow-xs cursor-pointer"
           >
             <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-slate-500" />
-            导出候选列表 (CSV)
+            导出候选 (CSV)
           </button>
         </div>
       </div>

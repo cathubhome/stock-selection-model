@@ -36,6 +36,23 @@ export interface TaskProgressResponse {
   error?: string | null;
 }
 
+export interface GovernanceCheckItem {
+  level: string;
+  name: string;
+  current: string;
+  threshold: string;
+  passed: boolean;
+  desc: string;
+}
+
+export interface GovernanceStatusResponse {
+  passed: boolean;
+  label: string;
+  failed_reasons: string[];
+  warnings: string[];
+  checks: GovernanceCheckItem[];
+}
+
 export async function fetchSystemStatus(): Promise<SystemStatusResponse | null> {
   try {
     const res = await fetch(API_BASE + '/status');
@@ -66,6 +83,23 @@ export async function addPoolStocks(symbols: string[], source = 'Web界面添加
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+export async function batchAddPoolStocks(text: string, source = '批量粘贴导入'): Promise<{ ok: boolean; added: number; total: number } | null> {
+  try {
+    const res = await fetch(API_BASE + '/pool/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, source }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: '批量添加失败' }));
+      throw new Error(err.detail || '批量添加失败');
+    }
+    return await res.json();
+  } catch (err: any) {
+    throw err;
   }
 }
 
@@ -116,6 +150,15 @@ export async function syncMetadata(): Promise<any> {
   return await res.json();
 }
 
+export async function repairDataQuality(): Promise<any> {
+  const res = await fetch(API_BASE + '/data/repair-quality', { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: '数据质量修复失败' }));
+    throw new Error(err.detail || '数据质量修复失败');
+  }
+  return await res.json();
+}
+
 export async function fetchLatestScores(): Promise<LatestScoresResponse | null> {
   try {
     const res = await fetch(API_BASE + '/scores/latest');
@@ -126,20 +169,20 @@ export async function fetchLatestScores(): Promise<LatestScoresResponse | null> 
   }
 }
 
-export async function runScoring(params: {
-  horizon: number;
-  top_k: number;
-  weights: WeightConfig;
+export async function runScoring(payload: {
+  horizon?: number;
+  top_k?: number;
+  weights?: WeightConfig;
   fetch_sentiment?: boolean;
-}): Promise<any> {
+}): Promise<LatestScoresResponse | null> {
   const res = await fetch(API_BASE + '/scores/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: '模型评分运行失败' }));
-    throw new Error(err.detail || '模型评分运行失败');
+    const err = await res.json().catch(() => ({ detail: '评分计算失败' }));
+    throw new Error(err.detail || '评分计算失败');
   }
   return await res.json();
 }
@@ -154,23 +197,33 @@ export async function fetchLatestBacktest(): Promise<LatestBacktestResponse | nu
   }
 }
 
-export async function runBacktest(params: {
-  horizon: number;
-  top_k: number;
+export async function runBacktest(payload: {
+  horizon?: number;
+  top_k?: number;
+  transaction_cost_bps?: number;
+  benchmark?: string;
   weights?: WeightConfig;
-  transaction_cost_bps: number;
-  benchmark: string;
-}): Promise<LatestBacktestResponse> {
+}): Promise<LatestBacktestResponse | null> {
   const res = await fetch(API_BASE + '/backtest/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: '回测执行失败' }));
-    throw new Error(err.detail || '回测执行失败');
+    const err = await res.json().catch(() => ({ detail: '回测运行失败' }));
+    throw new Error(err.detail || '回测运行失败');
   }
   return await res.json();
+}
+
+export async function fetchGovernanceStatus(): Promise<GovernanceStatusResponse | null> {
+  try {
+    const res = await fetch(API_BASE + '/governance/status');
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchResearchRuns(): Promise<ArchiveRun[]> {
@@ -181,4 +234,39 @@ export async function fetchResearchRuns(): Promise<ArchiveRun[]> {
   } catch {
     return [];
   }
+}
+
+export async function fetchRunDetail(runId: string): Promise<any> {
+  try {
+    const res = await fetch(API_BASE + '/runs/' + encodeURIComponent(runId));
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+// Direct File Downloads
+export function downloadFile(url: string, filename: string) {
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+export function downloadCandidateExcel() {
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  downloadFile(`${API_BASE}/export/excel`, `candidate_picks_${today}.xlsx`);
+}
+
+export function downloadResearchReportPdf() {
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  downloadFile(`${API_BASE}/export/pdf`, `research_report_${today}.pdf`);
+}
+
+export function downloadBacktestCsv() {
+  const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  downloadFile(`${API_BASE}/export/backtest-csv`, `backtest_periods_${today}.csv`);
 }

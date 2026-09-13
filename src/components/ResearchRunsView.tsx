@@ -16,6 +16,8 @@ import {
   Clock
 } from 'lucide-react';
 import { ArchiveRun, ScoredStock } from '../types';
+import { fetchRunDetail } from '../api/client';
+import { Eye, X } from 'lucide-react';
 import { ARCHIVE_RESEARCH_RUNS, RAW_REMOTE_STOCKS } from '../data/remoteArchiveData';
 
 // Comprehensive fallback dictionary for quick symbol-to-name lookups
@@ -48,6 +50,20 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
   stocks = [],
 }) => {
   const [selectedLeftRunId, setSelectedLeftRunId] = useState<string>(runs[0]?.run_id || '');
+  const [activeRunDetail, setActiveRunDetail] = useState<{ run_id: string; manifest: any; picks: any[] } | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
+  const handleOpenDetail = async (runId: string) => {
+    setIsLoadingDetail(true);
+    try {
+      const res = await fetchRunDetail(runId);
+      if (res) setActiveRunDetail(res);
+    } catch (err) {
+      console.error('Failed to fetch run detail:', err);
+    } finally {
+      setIsLoadingDetail(false);
+    }
+  };
   const [selectedRightRunId, setSelectedRightRunId] = useState<string>(runs[2]?.run_id || '');
 
   // Fast lookup map for symbol -> { name, industry }
@@ -179,10 +195,19 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
                         <span className="text-rose-600 font-semibold font-sans">超额 +{r.excess_return}% · 夏普 {r.sharpe}</span>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 text-right">
-                      <span className="inline-flex items-center text-emerald-600 text-[10px] font-sans font-medium">
-                        <CheckCircle2 className="w-3 h-3 mr-1" /> 完整归档
-                      </span>
+                    <td className="py-2.5 px-4 text-right whitespace-nowrap">
+                      <div className="flex items-center justify-end space-x-2">
+                        <span className="inline-flex items-center text-emerald-600 text-[10px] font-sans font-medium">
+                          <CheckCircle2 className="w-3 h-3 mr-1" /> 已归档
+                        </span>
+                        <button
+                          onClick={() => handleOpenDetail(r.run_id)}
+                          className="inline-flex items-center px-2 py-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-sans font-medium transition-colors cursor-pointer"
+                        >
+                          <Eye className="w-3 h-3 mr-1" />
+                          详情
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -464,6 +489,78 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
           </div>
         </div>
       </div>
+      {/* Run Detail Modal */}
+      {activeRunDetail && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">运行快照详情 ({activeRunDetail.run_id})</h3>
+                <span className="text-xs text-slate-400 font-mono">
+                  创建时间: {activeRunDetail.manifest?.created_at || '历史记录'}
+                </span>
+              </div>
+              <button
+                onClick={() => setActiveRunDetail(null)}
+                className="w-8 h-8 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                  <span className="text-slate-400 block text-[10px]">运行类型</span>
+                  <span className="font-bold text-slate-800">{activeRunDetail.manifest?.kind === 'score' ? '多因子综合评分' : '历史前向回测'}</span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                  <span className="text-slate-400 block text-[10px]">预测/持有周期</span>
+                  <span className="font-bold text-slate-800">{activeRunDetail.manifest?.config?.horizon || 20} 日</span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                  <span className="text-slate-400 block text-[10px]">持仓/候选数量</span>
+                  <span className="font-bold text-slate-800">{activeRunDetail.manifest?.config?.top_k || activeRunDetail.picks?.length || 10} 只</span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                  <span className="text-slate-400 block text-[10px]">数据指纹</span>
+                  <span className="font-mono text-[10px] text-slate-600 truncate block">{activeRunDetail.manifest?.data_fingerprint?.slice(0, 10) || '--'}</span>
+                </div>
+              </div>
+
+              {activeRunDetail.picks && activeRunDetail.picks.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 mb-2">核心优选标的快照 (Top Picks)</h4>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-left text-xs text-slate-700">
+                      <thead className="bg-slate-50 text-slate-600 text-[11px] font-semibold border-b border-slate-200">
+                        <tr>
+                          <th className="py-2 px-3">排名</th>
+                          <th className="py-2 px-3">代码</th>
+                          <th className="py-2 px-3">名称</th>
+                          <th className="py-2 px-3">综合评分</th>
+                          <th className="py-2 px-3">模型评分</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono">
+                        {activeRunDetail.picks.map((p: any, idx: number) => (
+                          <tr key={idx} className="hover:bg-slate-50">
+                            <td className="py-1.5 px-3 font-bold text-slate-800 font-sans">{p.rank || idx + 1}</td>
+                            <td className="py-1.5 px-3 text-indigo-600">{p.symbol}</td>
+                            <td className="py-1.5 px-3 font-sans text-slate-800">{p.name || getStockName(p.symbol)}</td>
+                            <td className="py-1.5 px-3 font-bold text-slate-900">{Number(p.composite_score || 0).toFixed(1)}</td>
+                            <td className="py-1.5 px-3 text-slate-600">{Number(p.model_score || 0).toFixed(1)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

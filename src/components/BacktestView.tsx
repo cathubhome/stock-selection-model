@@ -34,7 +34,8 @@ import {
 } from 'recharts';
 import { BacktestConfig, ScoredStock } from '../types';
 import { runWalkForwardBacktest } from '../utils/backtest';
-import { fetchLatestBacktest, runBacktest, LatestBacktestResponse } from '../api/client';
+import { fetchLatestBacktest, runBacktest, LatestBacktestResponse, fetchGovernanceStatus, GovernanceStatusResponse, downloadBacktestCsv } from '../api/client';
+import { Download } from 'lucide-react';
 import { useEffect } from 'react';
 
 interface BacktestViewProps {
@@ -57,6 +58,13 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
 
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [serverBacktestResult, setServerBacktestResult] = useState<LatestBacktestResponse | null>(null);
+  const [govStatus, setGovStatus] = useState<GovernanceStatusResponse | null>(null);
+
+  useEffect(() => {
+    fetchGovernanceStatus().then(res => {
+      if (res) setGovStatus(res);
+    });
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -78,12 +86,17 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
   const handleRerun = async () => {
     setIsRecalculating(true);
     try {
+      let bmCode = '000300';
+      if (config.benchmark.includes('000905') || config.benchmark.includes('500')) bmCode = '000905';
+      else if (config.benchmark.includes('000852') || config.benchmark.includes('1000')) bmCode = '000852';
+
       const res = await runBacktest({
         horizon: config.horizon,
         top_k: config.top_k,
         transaction_cost_bps: config.transaction_cost_bps,
-        benchmark: '000300',
+        benchmark: bmCode,
       });
+      fetchGovernanceStatus().then(g => { if (g) setGovStatus(g); });
       if (res && res.metrics && res.curve && res.curve.length > 0) {
         setServerBacktestResult(res);
         setIsRecalculating(false);
@@ -187,14 +200,25 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
             </p>
           </div>
 
-          <button
-            onClick={handleRerun}
-            disabled={isRecalculating}
-            className="inline-flex items-center px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md transition-all whitespace-nowrap self-start md:self-center"
-          >
-            <Play className={`w-3.5 h-3.5 mr-1.5 fill-current ${isRecalculating ? 'animate-pulse' : ''}`} />
-            <span>{isRecalculating ? '计算中...' : '重新运行回测'}</span>
-          </button>
+          <div className="flex items-center gap-2 self-start md:self-center">
+            <button
+              onClick={handleRerun}
+              disabled={isRecalculating}
+              className="inline-flex items-center px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md transition-all whitespace-nowrap cursor-pointer"
+            >
+              <Play className={`w-3.5 h-3.5 mr-1.5 fill-current ${isRecalculating ? 'animate-pulse' : ''}`} />
+              <span>{isRecalculating ? '计算中...' : '重新运行回测'}</span>
+            </button>
+
+            <button
+              onClick={downloadBacktestCsv}
+              className="inline-flex items-center px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs border border-white/20 transition-all whitespace-nowrap cursor-pointer"
+              title="下载每期调仓换股与超额收益明细CSV"
+            >
+              <Download className="w-3.5 h-3.5 mr-1.5 text-slate-300" />
+              <span>下载回测明细 (CSV)</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -373,19 +397,33 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {gateChecks.map((g, i) => (
-                    <tr key={i} className="hover:bg-slate-50">
-                      <td className="py-2.5 px-4 font-bold text-slate-900">{g.name}</td>
-                      <td className="py-2.5 px-4 text-slate-600 font-mono text-[11px]">{g.req}</td>
-                      <td className="py-2.5 px-4 font-bold font-mono text-indigo-700">{g.val}</td>
-                      <td className="py-2.5 px-4">
-                        <span className="inline-flex items-center text-emerald-700 font-bold">
-                          <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> 通过
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-4 text-slate-500 text-[11px]">{g.desc}</td>
-                    </tr>
-                  ))}
+                  {(govStatus?.checks || gateChecks).map((g: any, i: number) => {
+                    const isPass = g.passed !== undefined ? g.passed : true;
+                    const reqVal = g.threshold || g.req || '--';
+                    const curVal = g.current || g.val || '--';
+                    return (
+                      <tr key={i} className="hover:bg-slate-50">
+                        <td className="py-2.5 px-4 font-bold text-slate-900">
+                          {g.level ? <span className="mr-1.5 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">{g.level}</span> : null}
+                          {g.name}
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-600 font-mono text-[11px]">{reqVal}</td>
+                        <td className="py-2.5 px-4 font-bold font-mono text-indigo-700">{curVal}</td>
+                        <td className="py-2.5 px-4">
+                          {isPass ? (
+                            <span className="inline-flex items-center text-emerald-700 font-bold">
+                              <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> 通过
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center text-rose-600 font-bold">
+                              <AlertTriangle className="w-3.5 h-3.5 mr-1" /> 未通过
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-4 text-slate-500 text-[11px]">{g.desc}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

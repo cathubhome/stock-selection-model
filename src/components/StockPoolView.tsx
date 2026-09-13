@@ -16,7 +16,8 @@ import {
 } from 'lucide-react';
 import { ScoredStock } from '../types';
 import { REMOTE_METADATA_STATUS } from '../data/remoteArchiveData';
-import { startDataDownload, fetchDownloadProgress, searchUniverse, syncMetadata } from '../api/client';
+import { startDataDownload, fetchDownloadProgress, searchUniverse, syncMetadata, batchAddPoolStocks, repairDataQuality, fetchLatestScores } from '../api/client';
+import { FileText, Wrench } from 'lucide-react';
 
 interface StockPoolViewProps {
   stocks: ScoredStock[];
@@ -44,6 +45,50 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   const [isSyncingMeta, setIsSyncingMeta] = useState(false);
   const [syncMetaSuccess, setSyncMetaSuccess] = useState(false);
   const [suggestions, setSuggestions] = useState<Array<{ symbol: string; name: string; market: string }>>([]);
+  const [addMode, setAddMode] = useState<'single' | 'batch'>('single');
+  const [batchText, setBatchText] = useState('');
+  const [isBatchAdding, setIsBatchAdding] = useState(false);
+  const [batchSuccessMsg, setBatchSuccessMsg] = useState<string | null>(null);
+  const [isRepairingQuality, setIsRepairingQuality] = useState(false);
+  const [repairQualityMsg, setRepairQualityMsg] = useState<string | null>(null);
+
+  const handleRepairQuality = async () => {
+    setIsRepairingQuality(true);
+    setRepairQualityMsg(null);
+    try {
+      const res = await repairDataQuality();
+      setRepairQualityMsg(res?.message || '修复诊断完成');
+      setTimeout(() => setRepairQualityMsg(null), 4000);
+    } catch (err: any) {
+      setRepairQualityMsg(err?.message || '修复失败');
+      setTimeout(() => setRepairQualityMsg(null), 4000);
+    } finally {
+      setIsRepairingQuality(false);
+    }
+  };
+
+  const handleBatchSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!batchText.trim()) return;
+    setIsBatchAdding(true);
+    setBatchSuccessMsg(null);
+    try {
+      const res = await batchAddPoolStocks(batchText.trim());
+      if (res && res.ok) {
+        setBatchSuccessMsg(`成功解析并加入 ${res.added} 只标的，当前池总量 ${res.total} 只`);
+        setBatchText('');
+        setTimeout(() => {
+          setBatchSuccessMsg(null);
+          setShowAddModal(false);
+          window.location.reload();
+        }, 1500);
+      }
+    } catch (err: any) {
+      setBatchSuccessMsg(`导入失败: ${err?.message || '文本解析异常'}`);
+    } finally {
+      setIsBatchAdding(false);
+    }
+  };
 
   const handleSyncMeta = async () => {
     setIsSyncingMeta(true);
@@ -235,6 +280,16 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
               距今 9 天待同步
             </span>
           </div>
+
+          <button
+            onClick={handleRepairQuality}
+            disabled={isRepairingQuality}
+            className="inline-flex items-center px-3 py-2 rounded-lg text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition-colors shadow-xs cursor-pointer"
+            title="扫描行情缺失/停牌滞后并自动补全修复"
+          >
+            <Wrench className={`w-3.5 h-3.5 mr-1.5 ${isRepairingQuality ? 'animate-spin' : 'text-amber-600'}`} />
+            <span>{isRepairingQuality ? '正在体检修复...' : repairQualityMsg || '一键数据质量体检修复'}</span>
+          </button>
 
           <button
             onClick={handleSyncMeta}
@@ -466,11 +521,75 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
       {showAddModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">手动添加标的至股票池</h3>
-            <p className="text-xs text-slate-500 mb-4">
-              支持沪深A股与港股通，加入后将自动下载行情与初始化多因子计算
-            </p>
+            <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setAddMode('single')}
+                  className={`text-xs font-bold pb-1.5 border-b-2 transition-colors cursor-pointer ${
+                    addMode === 'single' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  单只检索添加
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAddMode('batch')}
+                  className={`text-xs font-bold pb-1.5 border-b-2 transition-colors cursor-pointer ${
+                    addMode === 'batch' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  批量文本/自选粘贴导入
+                </button>
+              </div>
+            </div>
 
+            {addMode === 'batch' ? (
+              <form onSubmit={handleBatchSubmit} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    粘贴股票代码或文本（支持换行、空格或逗号分隔，如 300476, 600519）
+                  </label>
+                  <textarea
+                    rows={6}
+                    value={batchText}
+                    onChange={(e) => setBatchText(e.target.value)}
+                    placeholder="例如：
+300476 胜宏科技
+600519 贵州茅台
+002407 多氟多"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                    required
+                  />
+                  <span className="text-[11px] text-slate-400 block mt-1">
+                    系统将自动提取6位证券代码并与全市场目录关联匹配中文名称。
+                  </span>
+                </div>
+
+                {batchSuccessMsg && (
+                  <div className="p-2.5 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-800 font-medium">
+                    {batchSuccessMsg}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddModal(false)}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isBatchAdding}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs cursor-pointer"
+                  >
+                    {isBatchAdding ? '正在解析导入...' : '开始批量导入'}
+                  </button>
+                </div>
+              </form>
+            ) : (
             <form onSubmit={handleAddSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -547,6 +666,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

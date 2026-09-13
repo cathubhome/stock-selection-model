@@ -1,4 +1,4 @@
-export interface StockBasic {
+﻿export interface StockBasic {
   symbol: string;
   name: string;
   pinyin: string;
@@ -12,55 +12,36 @@ export interface MarketQuote {
   symbol: string;
   name: string;
   price: number;
-  change: number; // percentage, e.g. 2.45
-  turnover: number; // percentage, e.g. 4.2
-  volume_ratio: number; // e.g. 1.35
-  volume: number; // in lots or shares
-  amount: number; // in CNY
-  pe_ttm: number;
-  pb: number;
-  high_52w: number;
-  low_52w: number;
-}
-
-export interface FactorMetrics {
-  ret_5: number;
-  ret_20: number;
-  ret_60: number;
-  ret_120: number;
-  vol_20: number;
-  sma_20_ratio: number;
-  sma_60_ratio: number;
-  volume_ratio_20: number;
-  obv_slope_20: number;
-  money_flow_20: number;
-  body_pct: number;
-  close_position: number;
-  upper_shadow_pct: number;
-  lower_shadow_pct: number;
+  change: number;
+  turnover: number;
+  volume_ratio: number;
+  volume: number;
+  amount: number;
+  pe_ttm?: number;
+  pb?: number;
+  high_52w?: number;
+  low_52w?: number;
 }
 
 export interface ScoredStock extends StockBasic, MarketQuote {
   model_raw: number;
-  model_score: number; // 0 - 100
-  technical_score: number; // 0 - 100
-  volume_price_score: number; // 0 - 100
-  candle_score: number; // 0 - 100
-  sentiment_score: number; // 0 - 100
-  sentiment_source: string;
-  news_count: number;
-  composite_score: number; // 0 - 100
+  model_score: number;
+  technical_score: number;
+  volume_price_score: number;
+  candle_score: number;
+  sentiment_score: number;
+  sentiment_source?: string;
+  news_count?: number;
+  composite_score: number;
   rank: number;
-  odds_reward_risk: number; // e.g. 2.4
-  odds_win_rate: number; // percentage, e.g. 64.5
-  odds_expected_return: number; // percentage, e.g. 8.2
-  diagnostic_status: 'excellent' | 'good' | 'warning';
+  odds_reward_risk: number;
+  odds_win_rate: number;
+  odds_expected_return: number;
+  diagnostic_status: 'excellent' | 'good' | 'warning' | 'danger';
   diagnostic_message: string;
   trading_days: number;
   credibility_score?: number;
   credibility_grade?: string;
-  credibility_strategy?: number;
-  credibility_conditional?: number;
   credibility_stability?: number;
   credibility_agreement?: number;
   positive_evidences?: string[];
@@ -75,17 +56,11 @@ export interface WeightConfig {
   sentiment: number;
 }
 
-export interface BacktestPeriod {
-  period_index: number;
-  date: string;
-  rebalance_date: string;
-  holding_symbols: string[];
-  holding_names: string[];
-  period_return: number; // strategy period return
-  benchmark_return: number; // csi 300 period return
-  excess_return: number;
-  cost_deducted: number;
-  net_return: number;
+export interface BacktestConfig {
+  horizon: number;
+  top_k: number;
+  transaction_cost_bps: number;
+  benchmark: string;
 }
 
 export interface BacktestMetrics {
@@ -99,27 +74,38 @@ export interface BacktestMetrics {
   excess_return: number;
   calmar_ratio: number;
   volatility: number;
+  ic_mean?: number;
+  ic_confidence_low?: number;
+  ic_confidence_high?: number;
+  q5_q1_mean_return?: number;
 }
 
 export interface BacktestCurvePoint {
   date: string;
-  strategy_nav: number; // normalized to 1.0 at start
-  benchmark_nav: number; // normalized to 1.0 at start
+  strategy_nav: number;
+  benchmark_nav: number;
   drawdown: number;
 }
 
-export interface BacktestConfig {
-  horizon: number; // holding period in trading days: 5, 10, 20, 60
-  top_k: number; // number of stocks selected: 5, 10, 15, 20
-  transaction_cost_bps: number; // basis points, e.g. 15 bps (0.15%)
-  benchmark: string;
+export interface BacktestPeriod {
+  period_index: number;
+  date: string;
+  rebalance_date: string;
+  holding_symbols: string[];
+  holding_names?: string[];
+  portfolio_return?: number;
+  period_return?: number;
+  benchmark_return: number;
+  excess_return: number;
+  cost_deducted?: number;
+  turnover?: number;
 }
 
 export interface ArchiveRun {
   run_id: string;
   date: string;
   created_at: string;
-  kind: 'score' | 'backtest';
+  kind: 'score' | 'backtest' | string;
   stock_count: number;
   top_symbols: string[];
   avg_score: number;
@@ -128,4 +114,3 @@ export interface ArchiveRun {
 }
 
 export type ResearchStep = '研究看板' | '股票池与数据' | '综合评分' | '历史回测' | '研究记录';
-
