@@ -1,0 +1,6 @@
+{
+  "name": "A股选股研究台",
+  "description": "基于量价特征、技术面、K线形态与舆情多因子综合评分的A股选股研究工作台与回测系统",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
