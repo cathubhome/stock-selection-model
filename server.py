@@ -180,6 +180,30 @@ def _load_pool_panel(symbols: List[str]) -> pd.DataFrame:
     return panel[panel['symbol'].astype(str).str.zfill(6).isin(symbols)].copy()
 
 
+def _latest_market_values(symbol: str) -> Dict[str, Any]:
+    """Return the latest locally synchronized market values for a pool symbol."""
+    path = RAW_DATA_DIR / f'{symbol}.parquet'
+    if not path.exists():
+        return {}
+    try:
+        history = pd.read_parquet(path).sort_values('date').tail(2)
+        if history.empty:
+            return {}
+        latest = history.iloc[-1]
+        previous_close = safe_float(history.iloc[-2].get('close')) if len(history) > 1 else 0.0
+        close = safe_float(latest.get('close'))
+        change = ((close / previous_close) - 1.0) * 100.0 if previous_close else 0.0
+        return {
+            'price': round(close, 2),
+            'change': round(change, 2),
+            'turnover': round(safe_float(latest.get('turnover')), 2),
+            'amount': safe_float(latest.get('amount')),
+            'market_date': pd.Timestamp(latest['date']).strftime('%Y-%m-%d'),
+        }
+    except Exception:
+        return {}
+
+
 def _parse_date(value: Optional[str], default: str) -> str:
     if not value:
         return default
@@ -193,6 +217,17 @@ def _search_pinyin(universe_row: Dict[str, Any]) -> str:
     initials = str(universe_row.get('initials') or '').strip()
     return ' '.join(value for value in (full_pinyin, initials) if value)
 
+def _expected_market_close_date(now: Optional[datetime] = None) -> pd.Timestamp:
+    """Return the latest completed weekday trading session in China time."""
+    current = now or datetime.now()
+    current_day = pd.Timestamp(current.date())
+    if current_day.weekday() >= 5:
+        return (current_day - pd.offsets.BDay(1)).normalize()
+    if current.hour < 16:
+        return (current_day - pd.offsets.BDay(1)).normalize()
+    return current_day.normalize()
+
+
 def _market_data_freshness() -> Dict[str, Any]:
     latest_dates: List[pd.Timestamp] = []
     for path in RAW_DATA_DIR.glob('*.parquet'):
@@ -204,13 +239,16 @@ def _market_data_freshness() -> Dict[str, Any]:
         except Exception:
             continue
     if not latest_dates:
-        return {'latest_date': None, 'oldest_date': None, 'age_days': None, 'updated_symbols': 0, 'stale_symbols': 0}
+        return {'latest_date': None, 'oldest_date': None, 'expected_latest_date': _expected_market_close_date().strftime('%Y-%m-%d'), 'age_days': None, 'updated_symbols': 0, 'stale_symbols': 0}
     newest = max(latest_dates)
     oldest = min(latest_dates)
+    expected_latest = _expected_market_close_date()
+    missing_sessions = len(pd.bdate_range(newest + pd.Timedelta(days=1), expected_latest)) if newest < expected_latest else 0
     return {
         'latest_date': newest.strftime('%Y-%m-%d'),
         'oldest_date': oldest.strftime('%Y-%m-%d'),
-        'age_days': max(0, (pd.Timestamp.now().normalize() - newest).days),
+        'expected_latest_date': expected_latest.strftime('%Y-%m-%d'),
+        'age_days': missing_sessions,
         'updated_symbols': len(latest_dates),
         'stale_symbols': sum(date < newest for date in latest_dates),
     }
@@ -400,13 +438,14 @@ def get_stock_pool() -> List[Dict[str, Any]]:
         sym = str(row['symbol']).zfill(6)
         u_info = u_map.get(sym, {})
         s_info = latest_score_map.get(sym, {})
+        market_info = _latest_market_values(sym)
 
-        price = round(safe_float(s_info.get('close'), 10.0), 2)
+        price = market_info.get('price', round(safe_float(s_info.get('close'), 10.0), 2))
         change_val = s_info.get('涨跌幅')
         if pd.isna(change_val) or change_val is None:
             change_val = safe_float(s_info.get('daily_return')) * 100.0
-        change = round(safe_float(change_val, 0.0), 2)
-        turnover = round(safe_float(s_info.get('turnover')), 2)
+        change = market_info.get('change', round(safe_float(change_val, 0.0), 2))
+        turnover = market_info.get('turnover', round(safe_float(s_info.get('turnover')), 2))
         industry = str(s_info.get('industry') or u_info.get('industry') or '综合')
 
         result.append({
@@ -420,6 +459,8 @@ def get_stock_pool() -> List[Dict[str, Any]]:
             'price': price,
             'change': change,
             'turnover': turnover,
+            'amount': market_info.get('amount', safe_float(s_info.get('amount'))),
+            'market_date': market_info.get('market_date'),
             'composite_score': round(safe_float(s_info.get('composite_score'), 50.0), 1),
             'model_score': round(safe_float(s_info.get('model_score'), 50.0), 1),
             'technical_score': round(safe_float(s_info.get('technical_score'), 50.0), 1),
@@ -527,12 +568,18 @@ def lookup_universe_industry(symbol: str) -> Dict[str, Any]:
     return {'symbol': normalized_symbol, 'name': name, 'industry': '', 'source': '暂无可用申万行业数据', 'cached': False}
 
 def _background_download(task_id: str, symbols: List[str], mode: str, start_date: str, end_date: str) -> None:
+    universe = _load_universe_df()
+    name_map = {
+        str(row['symbol']).zfill(6): str(row.get('name') or row['symbol'])
+        for _, row in universe.iterrows()
+    } if not universe.empty else {}
+
     def progress_cb(current: int, total: int, symbol: str, note: str) -> None:
         with _TASK_LOCK:
             status = _TASK_STATUS.get(task_id, {})
             details = [item for item in status.get('details', []) if item.get('symbol') != symbol]
-            details.append({'symbol': symbol, 'ok': None, 'rows': None, 'start': '', 'end': '', 'source': '', 'error': '', 'note': note})
-            _TASK_STATUS[task_id] = {'running': True, 'current': current, 'total': total, 'percent': round(current / max(1, total) * 100, 1), 'symbol': symbol, 'message': f'[{current}/{total}] {symbol} - {note}', 'error': None, 'details': details}
+            details.append({'symbol': symbol, 'name': name_map.get(symbol, symbol), 'ok': None, 'rows': None, 'start': '', 'end': '', 'source': '', 'error': '', 'note': note})
+            _TASK_STATUS[task_id] = {'running': True, 'current': current, 'total': total, 'percent': round(current / max(1, total) * 100, 1), 'symbol': symbol, 'message': f'[{current}/{total}] {name_map.get(symbol, symbol)} ({symbol}) - {note}', 'error': None, 'details': details}
 
     try:
         if mode == 'full':
@@ -540,7 +587,8 @@ def _background_download(task_id: str, symbols: List[str], mode: str, start_date
         else:
             report = update_histories(symbols=symbols, end=end_date, output_dir=RAW_DATA_DIR, full_start=start_date, progress=progress_cb)
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'current': len(symbols), 'total': len(symbols), 'percent': 100.0, 'symbol': '', 'message': f'更新完成，共处理 {len(symbols)} 只标的', 'error': None, 'details': report}
+            details = [{**item, 'name': name_map.get(str(item.get('symbol', '')).zfill(6), str(item.get('symbol', '')))} for item in report]
+            _TASK_STATUS[task_id] = {'running': False, 'current': len(symbols), 'total': len(symbols), 'percent': 100.0, 'symbol': '', 'message': f'更新完成，共处理 {len(symbols)} 只标的', 'error': None, 'details': details}
     except Exception as exc:
         with _TASK_LOCK:
             _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'message': f'任务执行失败: {exc}', 'error': str(exc), 'details': _TASK_STATUS.get(task_id, {}).get('details', [])}

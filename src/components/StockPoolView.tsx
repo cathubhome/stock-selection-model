@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { 
   Search, 
   Plus, 
@@ -24,6 +24,7 @@ interface StockPoolViewProps {
   onAddStock: (stock: ScoredStock) => void;
   onRemoveStock: (symbol: string) => void;
   onSelectStock: (stock: ScoredStock) => void;
+  onRefreshPool?: () => Promise<void>;
 }
 
 export const StockPoolView: React.FC<StockPoolViewProps> = ({
@@ -31,6 +32,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   onAddStock,
   onRemoveStock,
   onSelectStock,
+  onRefreshPool,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [marketFilter, setMarketFilter] = useState<string>('全部');
@@ -55,6 +57,9 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   const [isRepairingQuality, setIsRepairingQuality] = useState(false);
   const [repairQualityMsg, setRepairQualityMsg] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<any | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const activityLogRef = useRef<HTMLDivElement>(null);
+  const pageSize = 20;
 
   const refreshMarketData = async () => {
     const status = await fetchSystemStatus();
@@ -64,6 +69,12 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   useEffect(() => {
     refreshMarketData();
   }, []);
+
+  useEffect(() => {
+    if (activityLogRef.current) {
+      activityLogRef.current.scrollTop = activityLogRef.current.scrollHeight;
+    }
+  }, [downloadDetails]);
 
   const handleRepairQuality = async () => {
     setIsRepairingQuality(true);
@@ -147,6 +158,18 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
     });
   }, [stocks, searchQuery, marketFilter]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, marketFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredStocks.length / pageSize));
+  const activePage = Math.min(currentPage, totalPages);
+  const pagedStocks = filteredStocks.slice((activePage - 1) * pageSize, activePage * pageSize);
+  const pageNumbers = Array.from(
+    { length: Math.min(5, totalPages) },
+    (_, index) => Math.max(1, Math.min(activePage - 2, totalPages - 4)) + index,
+  );
+
   // Real download with background polling
   const handleDownloadAll = async () => {
     setIsDownloading(true);
@@ -171,6 +194,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
               setIsDownloading(false);
               setDownloadMessage(prog.error || prog.message);
               setDownloadError(prog.error || null);
+              await onRefreshPool?.();
               await refreshMarketData();
               setDownloadSuccess(true);
               setTimeout(() => setDownloadSuccess(false), 4000);
@@ -287,8 +311,8 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
           <div className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
             <Clock className="w-3.5 h-3.5 text-slate-400" />
             <span>最新行情: <strong className="font-mono text-slate-800">{marketData?.latest_date || '--'}</strong></span>
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
-              {marketData?.age_days == null ? '正在读取时效' : `距今 ${marketData.age_days} 天待同步`}
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${marketData?.age_days === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+              {marketData?.age_days == null ? '正在读取时效' : marketData.age_days === 0 ? '已同步至最近收盘' : `待同步 ${marketData.age_days} 个交易日`}
             </span>
           </div>
 
@@ -360,25 +384,38 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
             </div>
             <span className="text-xs font-mono text-indigo-700">{downloadProgress}% · {downloadDetails.length} 只已处理</span>
           </div>
-          <div className="max-h-72 overflow-y-auto">
-            <table className="w-full text-left text-xs text-slate-700">
-              <thead className="sticky top-0 bg-slate-50 text-slate-500 text-[11px]">
-                <tr><th className="px-4 py-2">代码</th><th className="px-4 py-2">结果</th><th className="px-4 py-2">新增行数</th><th className="px-4 py-2">数据区间</th><th className="px-4 py-2">来源 / 说明</th></tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {downloadDetails.map((detail) => (
-                  <tr key={detail.symbol}>
-                    <td className="px-4 py-2 font-mono font-semibold">{detail.symbol}</td>
-                    <td className={`px-4 py-2 font-medium ${detail.ok === false ? 'text-rose-600' : detail.ok === true ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {detail.ok === false ? '失败' : detail.ok === true ? '完成' : '处理中'}
-                    </td>
-                    <td className="px-4 py-2">{detail.rows ?? '--'}</td>
-                    <td className="px-4 py-2 font-mono text-[11px]">{detail.start && detail.end ? `${detail.start} ~ ${detail.end}` : '--'}</td>
-                    <td className="px-4 py-2">{detail.error || [detail.source, detail.note].filter(Boolean).join(' · ') || '--'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div ref={activityLogRef} className="max-h-72 overflow-y-auto bg-slate-50/50 p-3 space-y-2">
+            {downloadDetails.length === 0 ? (
+              <p className="px-2 py-4 text-xs text-slate-400">正在等待第一只股票的更新结果…</p>
+            ) : downloadDetails.map((detail) => {
+              const isFailed = detail.ok === false;
+              const isComplete = detail.ok === true;
+              const statusClass = isFailed
+                ? 'border-rose-200 bg-rose-50 text-rose-700'
+                : isComplete
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-indigo-200 bg-indigo-50 text-indigo-700 animate-pulse';
+              return (
+                <div key={detail.symbol} className="flex gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-xs animate-in fade-in slide-in-from-bottom-1 duration-200">
+                  <span className={`mt-0.5 h-2 w-2 shrink-0 rounded-full ${isFailed ? 'bg-rose-500' : isComplete ? 'bg-emerald-500' : 'bg-indigo-500 animate-pulse'}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="font-semibold text-slate-900">{detail.name || detail.symbol}</span>
+                      <span className="font-mono text-[11px] text-slate-400">{detail.symbol}</span>
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${statusClass}`}>{isFailed ? '失败' : isComplete ? '完成' : '处理中'}</span>
+                    </div>
+                    <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                      {detail.error || [
+                        detail.rows != null ? `新增 ${detail.rows} 行` : '',
+                        detail.start && detail.end ? `${detail.start} ~ ${detail.end}` : '',
+                        detail.source,
+                        detail.note,
+                      ].filter(Boolean).join(' · ') || '正在请求行情数据'}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -415,12 +452,12 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
             <div className="font-bold text-emerald-700 mt-1">零前瞻泄露 (0 Leak)</div>
             <span className="text-[10px] text-emerald-600">严格公告日财务对齐</span>
           </div>
-          <div className="bg-white p-3 rounded-lg border border-amber-200 bg-amber-50/40">
-            <span className="text-amber-800 block text-[11px] font-medium">数据时效状态</span>
-            <div className="font-bold text-amber-950 mt-1">
-              {marketData?.age_days == null ? '状态读取中' : `滞后 ${marketData.age_days} 天`}
+          <div className={`bg-white p-3 rounded-lg border ${marketData?.age_days === 0 ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/40'}`}>
+            <span className={`block text-[11px] font-medium ${marketData?.age_days === 0 ? 'text-emerald-800' : 'text-amber-800'}`}>数据时效状态</span>
+            <div className={`font-bold mt-1 ${marketData?.age_days === 0 ? 'text-emerald-950' : 'text-amber-950'}`}>
+              {marketData?.age_days == null ? '状态读取中' : marketData.age_days === 0 ? '已同步至最近收盘' : `待同步 ${marketData.age_days} 个交易日`}
             </div>
-            <span className="text-[10px] text-amber-700">最新行情: {marketData?.latest_date || '--'}</span>
+            <span className={`text-[10px] ${marketData?.age_days === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>最新行情: {marketData?.latest_date || '--'}</span>
           </div>
         </div>
       </div>
@@ -484,10 +521,10 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredStocks.map((stock, idx) => (
+                pagedStocks.map((stock, idx) => (
                   <tr key={stock.symbol} className="hover:bg-slate-50/80 transition-colors">
                     <td className="py-3 px-4 text-slate-400 text-center w-12 font-mono">
-                      {idx + 1}
+                      {(activePage - 1) * pageSize + idx + 1}
                     </td>
                     <td className="py-3 px-4">
                       <div className="font-bold text-slate-900">{stock.name}</div>
@@ -557,6 +594,18 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
             </tbody>
           </table>
         </div>
+        {filteredStocks.length > 0 && (
+          <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 text-xs sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-slate-500">第 {activePage} / {totalPages} 页，共 {filteredStocks.length} 只标的</span>
+            <div className="flex items-center gap-1">
+              <button type="button" onClick={() => setCurrentPage(page => Math.max(1, page - 1))} disabled={activePage === 1} className="rounded border border-slate-200 px-2.5 py-1.5 text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 hover:bg-slate-50">上一页</button>
+              {pageNumbers.map(page => (
+                <button key={page} type="button" onClick={() => setCurrentPage(page)} className={`min-w-8 rounded px-2.5 py-1.5 ${page === activePage ? 'bg-indigo-600 font-semibold text-white' : 'border border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{page}</button>
+              ))}
+              <button type="button" onClick={() => setCurrentPage(page => Math.min(totalPages, page + 1))} disabled={activePage === totalPages} className="rounded border border-slate-200 px-2.5 py-1.5 text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 hover:bg-slate-50">下一页</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Add Stock Modal */}

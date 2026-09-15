@@ -14,6 +14,12 @@ def test_api_status():
     assert "pool_count" in data
     assert "market_sentiment" in data
 
+
+def test_market_freshness_uses_last_completed_session():
+    assert server._expected_market_close_date(server.datetime(2026, 9, 16, 10, 0)) == server.pd.Timestamp('2026-09-15')
+    assert server._expected_market_close_date(server.datetime(2026, 9, 16, 16, 30)) == server.pd.Timestamp('2026-09-16')
+    assert server._expected_market_close_date(server.datetime(2026, 9, 19, 10, 0)) == server.pd.Timestamp('2026-09-18')
+
 def test_api_universe_search():
     res = client.get("/api/universe/search?q=000001&limit=5")
     assert res.status_code == 200

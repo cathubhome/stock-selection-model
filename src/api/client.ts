@@ -8,7 +8,7 @@ export interface SystemStatusResponse {
   timestamp: string;
   pool_count: number;
   raw_bar_files: number;
-  market_data?: { latest_date: string | null; oldest_date: string | null; age_days: number | null; updated_symbols: number; stale_symbols: number };
+  market_data?: { latest_date: string | null; oldest_date: string | null; expected_latest_date?: string; age_days: number | null; updated_symbols: number; stale_symbols: number };
   metadata_status: any;
   market_sentiment: any;
   latest_score_run: any;
@@ -29,6 +29,7 @@ export interface LatestBacktestResponse {
 
 export interface DownloadDetail {
   symbol: string;
+  name?: string;
   ok: boolean | null;
   rows: number | null;
   start: string;

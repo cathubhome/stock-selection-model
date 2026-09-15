@@ -149,6 +149,11 @@ export const App: React.FC = () => {
     }
   };
 
+  const refreshPoolStocks = async () => {
+    const pool = await fetchStockPool();
+    if (pool) setPoolStocks(pool);
+  };
+
   const handleResetToDefault = () => {
     if (window.confirm('确认重置本地股票池与因子权重为远程仓库初始默认状态（97只标的）吗？')) {
       setStocks(RAW_REMOTE_STOCKS as ScoredStock[]);
@@ -229,6 +234,7 @@ export const App: React.FC = () => {
             stocks={poolStocks}
             onAddStock={handleAddStock}
             onRemoveStock={handleRemoveStock}
+            onRefreshPool={refreshPoolStocks}
             onSelectStock={(stock) => {
               setCurrentStep('综合评分');
             }}
