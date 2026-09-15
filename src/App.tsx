@@ -5,7 +5,7 @@ import { StockPoolView } from './components/StockPoolView';
 import { CompositeScoringView } from './components/CompositeScoringView';
 import { BacktestView } from './components/BacktestView';
 import { ResearchRunsView } from './components/ResearchRunsView';
-import { ResearchStep, ScoredStock, WeightConfig, ArchiveRun } from './types';
+import { ResearchStep, ScoredStock, WeightConfig, ArchiveRun, ScoringConfig } from './types';
 import { RAW_REMOTE_STOCKS, ARCHIVE_RESEARCH_RUNS } from './data/remoteArchiveData';
 import { DEFAULT_WEIGHTS } from './utils/scoring';
 import { fetchSystemStatus, fetchStockPool, addPoolStocks, removePoolStock, fetchLatestScores, runScoring, fetchScoringProgress, fetchResearchRuns } from './api/client';
@@ -24,6 +24,18 @@ export const App: React.FC = () => {
         if (Array.isArray(parsed) && parsed.length > 0) {
           return parsed;
         }
+      }
+    } catch {
+      // ignore
+    }
+    return RAW_REMOTE_STOCKS as ScoredStock[];
+  });
+  const [poolStocks, setPoolStocks] = useState<ScoredStock[]>(() => {
+    try {
+      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_POOL);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {
       // ignore
@@ -73,6 +85,9 @@ export const App: React.FC = () => {
       if (!isMounted) return;
       if (status && status.status === 'online') {
         setIsBackendOnline(true);
+        fetchStockPool().then((pool) => {
+          if (isMounted && pool && pool.length > 0) setPoolStocks(pool);
+        });
         fetchLatestScores().then((scoresRes) => {
           if (!isMounted) return;
           if (scoresRes && scoresRes.stocks && scoresRes.stocks.length > 0) {
@@ -95,11 +110,11 @@ export const App: React.FC = () => {
   // Persist state
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_POOL, JSON.stringify(stocks));
+      localStorage.setItem(LOCAL_STORAGE_KEY_POOL, JSON.stringify(poolStocks));
     } catch {
       // ignore
     }
-  }, [stocks]);
+  }, [poolStocks]);
 
   useEffect(() => {
     try {
@@ -119,8 +134,8 @@ export const App: React.FC = () => {
 
   // Actions
   const handleAddStock = (newStock: ScoredStock) => {
-    if (!stocks.some(s => s.symbol === newStock.symbol)) {
-      setStocks(prev => [newStock, ...prev]);
+    if (!poolStocks.some(s => s.symbol === newStock.symbol)) {
+      setPoolStocks(prev => [newStock, ...prev]);
       if (isBackendOnline) {
         addPoolStocks([newStock.symbol], newStock.source);
       }
@@ -128,7 +143,7 @@ export const App: React.FC = () => {
   };
 
   const handleRemoveStock = (symbol: string) => {
-    setStocks(prev => prev.filter(s => s.symbol !== symbol));
+    setPoolStocks(prev => prev.filter(s => s.symbol !== symbol));
     if (isBackendOnline) {
       removePoolStock(symbol);
     }
@@ -137,6 +152,7 @@ export const App: React.FC = () => {
   const handleResetToDefault = () => {
     if (window.confirm('确认重置本地股票池与因子权重为远程仓库初始默认状态（97只标的）吗？')) {
       setStocks(RAW_REMOTE_STOCKS as ScoredStock[]);
+      setPoolStocks(RAW_REMOTE_STOCKS as ScoredStock[]);
       setWeights(DEFAULT_WEIGHTS);
       setCurrentStep('研究看板');
       localStorage.removeItem(LOCAL_STORAGE_KEY_POOL);
@@ -145,16 +161,14 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleRunScoring = async () => {
+  const handleRunScoring = async (config: ScoringConfig) => {
     setIsScoringRunning(true);
     if (isBackendOnline) {
       try {
         setScoringProgress({ running: true, percent: 0, message: '评分任务初始化...', details: [] });
         const task = await runScoring({
-          horizon: 20,
-          top_k: 10,
+          ...config,
           weights,
-          fetch_sentiment: true,
         });
         if (task?.task_id) {
           while (true) {
@@ -176,33 +190,17 @@ export const App: React.FC = () => {
           setResearchRuns(runs);
         }
       } catch (err) {
-        console.error('FastAPI scoring error, falling back to local:', err);
+        const message = err instanceof Error ? err.message : '评分任务失败';
+        setScoringProgress((current: any) => ({
+          ...(current || {}), running: false, error: message, message: `评分失败：${message}`,
+        }));
       } finally {
         setIsScoringRunning(false);
       }
       return;
     }
-
-    // Local fallback
-    setTimeout(() => {
-      setIsScoringRunning(false);
-      const now = new Date();
-      const pad = (n: number) => n.toString().padStart(2, '0');
-      const timeStr = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}T${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-      const newRunId = `${timeStr}_score_${Math.random().toString(36).substring(2, 8)}`;
-      
-      const newRun: ArchiveRun = {
-        run_id: newRunId,
-        date: now.toISOString().slice(0, 10),
-        created_at: now.toISOString().replace('T', ' ').slice(0, 19),
-        kind: 'score',
-        stock_count: stocks.length,
-        top_symbols: stocks.slice(0, 5).map(s => s.symbol),
-        avg_score: Number((stocks.reduce((acc, cur) => acc + cur.composite_score, 0) / stocks.length).toFixed(1))
-      };
-
-      setResearchRuns(prev => [newRun, ...prev]);
-    }, 600);
+    setScoringProgress({ running: false, percent: 0, message: '评分服务不可用', error: 'FastAPI 后台未连接，未执行任何模拟评分', details: [] });
+    setIsScoringRunning(false);
   };
 
   return (
@@ -210,7 +208,7 @@ export const App: React.FC = () => {
       <Navbar
         currentStep={currentStep}
         onSelectStep={setCurrentStep}
-        stockCount={stocks.length}
+        stockCount={poolStocks.length}
         onResetToDefault={handleResetToDefault}
         isBackendOnline={isBackendOnline}
       />
@@ -228,7 +226,7 @@ export const App: React.FC = () => {
 
         {currentStep === '股票池与数据' && (
           <StockPoolView
-            stocks={stocks}
+            stocks={poolStocks}
             onAddStock={handleAddStock}
             onRemoveStock={handleRemoveStock}
             onSelectStock={(stock) => {

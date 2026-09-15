@@ -10,7 +10,7 @@ const fmtNum = (val: any, digits = 2, fallback = '--'): string => {
   if (isNaN(n)) return fallback;
   return n.toFixed(digits);
 };
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Sliders, 
   RotateCcw, 
@@ -19,23 +19,17 @@ import {
   BarChart2, 
   Flame, 
   MessageSquare,
-  Sparkles,
-  Award,
   ChevronRight,
-  ShieldCheck,
   FileSpreadsheet,
+  FileText,
   Play,
   CheckCircle2,
-  TrendingUp,
   Info,
   Calendar,
-  RefreshCw,
-  Clock,
   AlertTriangle
 } from 'lucide-react';
-import { ScoredStock, WeightConfig } from '../types';
-import { downloadCandidateExcel, downloadResearchReportPdf } from '../api/client';
-import { FileText, Download } from 'lucide-react';
+import { ScoredStock, ScoringConfig, WeightConfig } from '../types';
+import { downloadCandidateExcel, downloadResearchReportPdf, fetchScoringContext, fetchSystemStatus, ScoringContextResponse, SystemStatusResponse } from '../api/client';
 import { DEFAULT_WEIGHTS } from '../utils/scoring';
 
 interface CompositeScoringViewProps {
@@ -43,9 +37,9 @@ interface CompositeScoringViewProps {
   onUpdateWeights: (weights: WeightConfig) => void;
   stocks: ScoredStock[];
   onSelectStock: (stock: ScoredStock) => void;
-  onRunScoring: () => void;
+  onRunScoring: (config: ScoringConfig) => void;
   isScoringRunning?: boolean;
-  scoringProgress?: { running?: boolean; percent?: number; message?: string; error?: string | null; details?: any[] };
+  scoringProgress?: { running?: boolean; percent?: number; message?: string; error?: string | null; details?: any[]; elapsed_seconds?: number; result?: any };
   onNavigateToData?: () => void;
 }
 
@@ -62,6 +56,30 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
   const [selectedStockSymbol, setSelectedStockSymbol] = useState<string>(stocks[0]?.symbol || '605277');
   const [tableView, setTableView] = useState<'决策' | '模型' | '技术' | '赔率' | '可信度'>('决策');
   const [searchFilter, setSearchFilter] = useState('');
+  const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
+  const [scoringContext, setScoringContext] = useState<ScoringContextResponse | null>(null);
+  const [scoringConfig, setScoringConfig] = useState<ScoringConfig>({ horizon: 20, top_k: 10, fetch_sentiment: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      const [status, context] = await Promise.all([fetchSystemStatus(), fetchScoringContext()]);
+      if (!cancelled) {
+        setSystemStatus(status);
+        setScoringContext(context);
+      }
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [scoringProgress?.running]);
+
+  const latestMarketDate = systemStatus?.market_data?.latest_date || '--';
+  const latestDataDate = scoringContext?.manifest?.data_end || stocks[0]?.date || '--';
+  const scoreUsesLatestMarket = latestDataDate !== '--' && latestDataDate === latestMarketDate;
 
   const sumWeights = 
     weights.model + 
@@ -69,6 +87,11 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
     weights.volume_price + 
     weights.candle + 
     weights.sentiment;
+  const weightsValid = Math.abs(sumWeights - 1) < 0.001;
+  const persistedWeights = scoringContext?.manifest?.config?.weights;
+  const isPreview = persistedWeights
+    ? (Object.keys(weights) as Array<keyof WeightConfig>).some(key => Math.abs(weights[key] - Number(persistedWeights[key] || 0)) > 0.001)
+    : false;
 
   const handleSliderChange = (key: keyof WeightConfig, val: number) => {
     onUpdateWeights({
@@ -83,19 +106,20 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
 
   // Re-calculate composite scores dynamically based on user-adjusted weights
   const scoredList = useMemo(() => {
-    const normModel = weights.model / sumWeights;
-    const normTech = weights.technical / sumWeights;
-    const normVP = weights.volume_price / sumWeights;
-    const normCandle = weights.candle / sumWeights;
-    const normSent = weights.sentiment / sumWeights;
+    const total = sumWeights || 1;
+    const normModel = weights.model / total;
+    const normTech = weights.technical / total;
+    const normVP = weights.volume_price / total;
+    const normCandle = weights.candle / total;
+    const normSent = weights.sentiment / total;
 
     const list = stocks.map((s) => {
       const dynScore = 
-        s.model_score * normModel +
-        s.technical_score * normTech +
-        s.volume_price_score * normVP +
-        s.candle_score * normCandle +
-        s.sentiment_score * normSent;
+        safeNum(s.model_score) * normModel +
+        safeNum(s.technical_score) * normTech +
+        safeNum(s.volume_price_score) * normVP +
+        safeNum(s.candle_score) * normCandle +
+        safeNum(s.sentiment_score) * normSent;
 
       return {
         ...s,
@@ -113,13 +137,23 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
     return scoredList.filter(s => 
       s.symbol.toLowerCase().includes(q) || 
       s.name.toLowerCase().includes(q) ||
-      s.industry.toLowerCase().includes(q)
+      (s.industry || '').toLowerCase().includes(q)
     );
   }, [scoredList, searchFilter]);
 
   const activeStock = useMemo(() => {
     return scoredList.find(s => s.symbol === selectedStockSymbol) || scoredList[0] || null;
   }, [scoredList, selectedStockSymbol]);
+  const factorContribution = useMemo(() => {
+    if (!activeStock) return [];
+    return [
+      { label: '模型评分', score: safeNum(activeStock.model_score), weight: weights.model },
+      { label: '技术评分', score: safeNum(activeStock.technical_score), weight: weights.technical },
+      { label: '量价评分', score: safeNum(activeStock.volume_price_score), weight: weights.volume_price },
+      { label: 'K线评分', score: safeNum(activeStock.candle_score), weight: weights.candle },
+      { label: '舆情评分', score: safeNum(activeStock.sentiment_score), weight: weights.sentiment },
+    ].map(item => ({ ...item, contribution: item.score * item.weight }));
+  }, [activeStock, weights]);
 
   // Export CSV
   const handleExportCSV = () => {
@@ -140,7 +174,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
       s.sentiment_score,
       s.odds_win_rate,
       s.odds_reward_risk,
-      s.credibility_score || 40,
+      s.credibility_score ?? '',
       s.industry
     ]);
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
@@ -173,11 +207,11 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
 
         <div className="flex flex-wrap items-center gap-2.5">
           {/* Micro Data Provenance Badge */}
-          <div className="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
+          <div className={`inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-xs ${scoreUsesLatestMarket ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
             <Calendar className="w-3.5 h-3.5 text-slate-400" />
-            <span>评分截面: <strong className="font-mono text-slate-800">2026-09-04</strong></span>
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200" title="本地数据最新交易日为 2026-09-04">
-              距今 9 天
+            <span>评分截面: <strong className="font-mono">{latestDataDate}</strong></span>
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${scoreUsesLatestMarket ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
+              {scoreUsesLatestMarket ? '评分已基于最新行情' : `行情 ${latestMarketDate}，评分待重算`}
             </span>
             {onNavigateToData && (
               <button
@@ -191,16 +225,16 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
           </div>
 
           <button
-            onClick={onRunScoring}
-            disabled={isScoringRunning}
+            onClick={() => onRunScoring(scoringConfig)}
+            disabled={isScoringRunning || !weightsValid}
             className={`inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition-all ${
-              isScoringRunning
+              isScoringRunning || !weightsValid
                 ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                 : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
             }`}
           >
             <Play className={`w-3.5 h-3.5 mr-1.5 fill-current ${isScoringRunning ? 'animate-pulse' : ''}`} />
-            {isScoringRunning ? '正在重新测算评分...' : '重新运行评分快照'}
+            {isScoringRunning ? '正在重新测算评分...' : !weightsValid ? '权重合计需为 100%' : '重新运行评分快照'}
           </button>
 
           <button
@@ -240,20 +274,43 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                 {scoringProgress.error || scoringProgress.message || '等待评分任务返回状态'}
               </p>
             </div>
-            <span className="text-xs font-mono text-indigo-700">{Math.round(scoringProgress.percent || 0)}%</span>
+            <div className="text-right">
+              <span className="text-xs font-mono text-indigo-700">{Math.round(scoringProgress.percent || 0)}%</span>
+              {scoringProgress.elapsed_seconds != null && <span className="block text-[10px] text-slate-400">耗时 {scoringProgress.elapsed_seconds.toFixed(1)} 秒</span>}
+            </div>
           </div>
+          <div className="h-1.5 bg-slate-100"><div className={`h-full transition-all ${scoringProgress.error ? 'bg-rose-500' : 'bg-indigo-600'}`} style={{ width: `${Math.min(100, scoringProgress.percent || 0)}%` }} /></div>
           <div className="max-h-56 overflow-y-auto px-4 py-2">
             {(scoringProgress.details || []).map((detail: any, index: number) => (
               <div key={`${detail.stage || detail.symbol || 'step'}-${index}`} className="flex items-center justify-between py-1.5 text-xs border-b border-slate-50 last:border-0">
-                <span className="text-slate-700">{detail.stage || detail.symbol || '评分步骤'}</span>
-                <span className={detail.error ? 'text-rose-600' : 'text-slate-500'}>{detail.error || detail.status || detail.note || '--'}</span>
+                <span className="text-slate-700">{detail.stage || '评分步骤'}{detail.symbol ? ` · ${detail.symbol}` : ''}</span>
+                <span className={detail.status === '失败' || detail.error ? 'text-rose-600' : detail.status === '完成' ? 'text-emerald-600' : 'text-indigo-600'}>{detail.error || detail.status || detail.note || '--'}</span>
               </div>
             ))}
           </div>
+          {scoringProgress.result && (
+            <div className="px-4 py-3 bg-emerald-50 border-t border-emerald-100 text-xs text-emerald-800">
+              运行 {scoringProgress.result.run_id} · 数据 {scoringProgress.result.data_end} · 参与 {scoringProgress.result.scored_count} 只 · 候选 {scoringProgress.result.candidate_count} 只
+            </div>
+          )}
         </div>
       ) : null}
       {/* Weight Controls & Presets Accordion / Card */}
       <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg bg-slate-50 border border-slate-200 p-3">
+          <label className="text-xs text-slate-600">预测周期（交易日）
+            <input type="number" min={5} max={60} step={5} value={scoringConfig.horizon} onChange={event => setScoringConfig(current => ({ ...current, horizon: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-slate-800" />
+          </label>
+          <label className="text-xs text-slate-600">候选数量
+            <input type="number" min={5} max={50} step={5} value={scoringConfig.top_k} onChange={event => setScoringConfig(current => ({ ...current, top_k: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-slate-800" />
+          </label>
+          <label className="flex items-center gap-2 self-end rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+            <input type="checkbox" checked={scoringConfig.fetch_sentiment} onChange={event => setScoringConfig(current => ({ ...current, fetch_sentiment: event.target.checked }))} className="accent-indigo-600" />
+            抓取最新舆情（东方财富新闻）
+          </label>
+        </div>
+        {isPreview && <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">当前列表是权重调整后的排序预览；点击“重新运行评分快照”后才会生成正式评分、条件证据和研究记录。</div>}
+        {!weightsValid && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">当前权重合计 {(sumWeights * 100).toFixed(0)}%，必须调整为 100% 才能运行正式评分。</div>}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div>
             <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
@@ -522,13 +579,13 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       </td>
                       <td className="py-2.5 px-3">
                         <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold ${
-                          stock.composite_score >= 80 
+                          safeNum(stock.composite_score) >= 80
                             ? 'bg-rose-100 text-rose-800' 
-                            : stock.composite_score >= 70
+                            : safeNum(stock.composite_score) >= 70
                               ? 'bg-indigo-100 text-indigo-800'
                               : 'bg-slate-100 text-slate-700'
                         }`}>
-                          {stock.composite_score.toFixed(1)}
+                          {fmtNum(stock.composite_score, 1)}
                         </span>
                       </td>
 
@@ -541,13 +598,13 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                             </span>
                           </td>
                           <td className="py-2.5 px-3">
-                            <span>{stock.odds_win_rate}%</span>
+                            <span>{stock.odds_win_rate == null ? '未积累' : `${fmtNum(stock.odds_win_rate, 1)}%`}</span>
                             <span className="text-slate-400 mx-1">/</span>
-                            <span>{stock.odds_reward_risk}R</span>
+                            <span>{stock.odds_reward_risk == null ? '--' : `${fmtNum(stock.odds_reward_risk, 2)}R`}</span>
                           </td>
                           <td className="py-2.5 px-3">
                             <span className="text-[11px] text-slate-600">
-                              {stock.credibility_score?.toFixed(0) || '40'}分 ({stock.credibility_grade || '中'})
+                              {stock.credibility_score == null ? '待评估' : `${fmtNum(stock.credibility_score, 0)}分 (${stock.credibility_grade || '未分级'})`}
                             </span>
                           </td>
                         </>
@@ -556,8 +613,8 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       {tableView === '模型' && (
                         <>
                           <td className="py-2.5 px-3 font-mono">{stock.model_score.toFixed(1)}</td>
-                          <td className="py-2.5 px-3 font-mono text-slate-500">{stock.model_raw.toFixed(4)}</td>
-                          <td className="py-2.5 px-3 text-slate-600">{stock.industry}</td>
+                          <td className="py-2.5 px-3 font-mono text-slate-500">{fmtNum(stock.model_raw, 4)}</td>
+                          <td className="py-2.5 px-3 text-slate-600">{stock.industry || '行业待补全'}</td>
                         </>
                       )}
 
@@ -571,17 +628,17 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
 
                       {tableView === '赔率' && (
                         <>
-                          <td className="py-2.5 px-3 font-semibold text-slate-900">{stock.odds_win_rate}%</td>
-                          <td className="py-2.5 px-3 font-mono">{stock.odds_reward_risk}</td>
-                          <td className="py-2.5 px-3 text-emerald-700 font-semibold">+{stock.odds_expected_return}%</td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-900">{stock.odds_win_rate == null ? '未积累' : `${fmtNum(stock.odds_win_rate, 1)}%`}</td>
+                          <td className="py-2.5 px-3 font-mono">{fmtNum(stock.odds_reward_risk, 2)}</td>
+                          <td className={`py-2.5 px-3 font-semibold ${safeNum(stock.odds_expected_return) >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{stock.odds_expected_return == null ? '--' : `${safeNum(stock.odds_expected_return) >= 0 ? '+' : ''}${fmtNum(stock.odds_expected_return, 2)}%`}</td>
                         </>
                       )}
 
                       {tableView === '可信度' && (
                         <>
-                          <td className="py-2.5 px-3 font-bold text-indigo-700">{stock.credibility_grade || '中'}</td>
-                          <td className="py-2.5 px-3 font-mono">{stock.credibility_stability?.toFixed(0) || '80'}%</td>
-                          <td className="py-2.5 px-3 font-mono">{stock.credibility_agreement?.toFixed(0) || '75'}%</td>
+                          <td className="py-2.5 px-3 font-bold text-indigo-700">{stock.credibility_grade || '待评估'}</td>
+                          <td className="py-2.5 px-3 font-mono">{stock.credibility_stability == null ? '--' : `${fmtNum(stock.credibility_stability, 0)}%`}</td>
+                          <td className="py-2.5 px-3 font-mono">{stock.credibility_agreement == null ? '--' : `${fmtNum(stock.credibility_agreement, 0)}%`}</td>
                         </>
                       )}
 
@@ -607,11 +664,11 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                     <h3 className="text-lg font-bold text-slate-900">{activeStock.name}</h3>
                     <span className="text-xs font-mono text-slate-400">{activeStock.symbol}</span>
                     <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
-                      {activeStock.industry}
+                      {activeStock.industry || '行业待补全'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    最新价 ¥{(Number(activeStock.price) || 0).toFixed(2)} · 换手率 {(Number(activeStock.turnover) || 0).toFixed(2)}% · PE {activeStock.pe_ttm != null ? Number(activeStock.pe_ttm).toFixed(1) : '--'}
+                    最新价 {activeStock.price == null ? '--' : `¥${fmtNum(activeStock.price, 2)}`} · 换手率 {activeStock.turnover == null ? '--' : `${fmtNum(activeStock.turnover, 2)}%`} · PE {fmtNum(activeStock.pe_ttm, 1)}
                   </p>
                 </div>
 
@@ -620,6 +677,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                   <span className="text-xl font-extrabold text-indigo-600 font-mono">
                     #{activeStock.rank}
                   </span>
+                  {activeStock.rank_change && activeStock.rank_change !== '-' && <span className="block text-[10px] text-slate-500">较上次 {activeStock.rank_change}</span>}
                 </div>
               </div>
 
@@ -701,9 +759,9 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                   <span>正向支撑证据 (Positive Evidence)</span>
                 </div>
                 <ul className="text-xs text-emerald-900 space-y-1 pl-5 list-disc">
-                  {activeStock.positive_evidences?.map((ev, i) => (
+                  {(activeStock.positive_evidences?.length ? activeStock.positive_evidences : ['当前没有达到展示条件的明确正面证据']).map((ev, i) => (
                     <li key={i}>{ev}</li>
-                  )) || <li>指标运行良好，无负面异动</li>}
+                  ))}
                 </ul>
               </div>
 
@@ -714,9 +772,19 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                   <span>风险提示与警示 (Risk & Warnings)</span>
                 </div>
                 <ul className="text-xs text-amber-900 space-y-1 pl-5 list-disc">
-                  {activeStock.negative_evidences?.map((ev, i) => (
+                  {(activeStock.negative_evidences?.length ? activeStock.negative_evidences : ['当前没有达到展示条件的明确反面证据']).map((ev, i) => (
                     <li key={i}>{ev}</li>
-                  )) || <li>未检出重大财务或违规风险信号</li>}
+                  ))}
+                </ul>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <div className="flex items-center space-x-1.5 text-slate-800 font-bold text-xs mb-1.5">
+                  <Info className="w-4 h-4 text-slate-500" />
+                  <span>数据与验证限制</span>
+                </div>
+                <ul className="text-xs text-slate-700 space-y-1 pl-5 list-disc">
+                  {(activeStock.limitations?.length ? activeStock.limitations : ['当前未识别到额外限制；历史表现仍不代表未来收益']).map((item, index) => <li key={index}>{item}</li>)}
                 </ul>
               </div>
 
@@ -725,13 +793,13 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                   <span className="text-[11px] text-slate-500 block">历史胜率 / 盈亏比</span>
                   <div className="font-bold text-slate-800 mt-0.5">
-                    {activeStock.odds_win_rate}% · {activeStock.odds_reward_risk}R
+                    {activeStock.odds_win_rate == null ? '未积累' : `${fmtNum(activeStock.odds_win_rate, 1)}%`} · {activeStock.odds_reward_risk == null ? '--' : `${fmtNum(activeStock.odds_reward_risk, 2)}R`}
                   </div>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                   <span className="text-[11px] text-slate-500 block">决策可信度评估</span>
                   <div className="font-bold text-indigo-700 mt-0.5">
-                    {activeStock.credibility_score?.toFixed(0) || '40'}分 ({activeStock.credibility_grade || '中'})
+                    {activeStock.credibility_score == null ? '待评估' : `${fmtNum(activeStock.credibility_score, 0)}分 (${activeStock.credibility_grade || '未分级'})`}
                   </div>
                 </div>
               </div>
@@ -740,6 +808,61 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
             <div className="py-12 text-center text-slate-400">请在左侧列表中点击选择一只标的查看证据归因</div>
           )}
         </div>
+      </div>
+
+      {activeStock && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 space-y-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">个股条件证据与权重贡献</h3>
+            <p className="text-xs text-slate-500 mt-0.5">条件统计来自已兑现且不重叠的历史高分样本；未积累时不填充推测值。</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] text-slate-500">条件样本</span><strong className="text-sm text-slate-900">{activeStock.conditional_sample_count ?? '未积累'}</strong></div>
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] text-slate-500">条件胜率</span><strong className="text-sm text-slate-900">{activeStock.conditional_win_rate == null ? '未积累' : `${(activeStock.conditional_win_rate * 100).toFixed(1)}%`}</strong></div>
+            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3"><span className="block text-[10px] text-slate-500">条件期望收益</span><strong className={safeNum(activeStock.conditional_expected_return) >= 0 ? 'text-sm text-emerald-700' : 'text-sm text-rose-700'}>{activeStock.conditional_expected_return == null ? '未积累' : `${safeNum(activeStock.conditional_expected_return) >= 0 ? '+' : ''}${(activeStock.conditional_expected_return * 100).toFixed(2)}%`}</strong></div>
+          </div>
+          {activeStock.conditional_sample_count != null && activeStock.conditional_sample_count >= 10 && (
+            <div className="rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-xs text-blue-800">
+              条件胜率 95% 区间：{activeStock.conditional_win_rate_low == null ? '--' : `${(activeStock.conditional_win_rate_low * 100).toFixed(1)}%`} 至 {activeStock.conditional_win_rate_high == null ? '--' : `${(activeStock.conditional_win_rate_high * 100).toFixed(1)}%`}；条件收益区间：{activeStock.conditional_return_low == null ? '--' : `${(activeStock.conditional_return_low * 100).toFixed(2)}%`} 至 {activeStock.conditional_return_high == null ? '--' : `${(activeStock.conditional_return_high * 100).toFixed(2)}%`}。
+            </div>
+          )}
+          <div className="overflow-hidden rounded-lg border border-slate-200">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-slate-500"><tr><th className="px-3 py-2 text-left">维度</th><th className="px-3 py-2 text-right">分项得分</th><th className="px-3 py-2 text-right">当前权重</th><th className="px-3 py-2 text-right">加权贡献</th></tr></thead>
+              <tbody className="divide-y divide-slate-100">{factorContribution.map(item => <tr key={item.label}><td className="px-3 py-2 text-slate-700">{item.label}</td><td className="px-3 py-2 text-right font-mono">{item.score.toFixed(1)}</td><td className="px-3 py-2 text-right font-mono">{(item.weight * 100).toFixed(0)}%</td><td className="px-3 py-2 text-right font-mono font-semibold text-indigo-700">{item.contribution.toFixed(1)}</td></tr>)}</tbody>
+              <tfoot className="bg-slate-50"><tr><td className="px-3 py-2 font-semibold" colSpan={3}>贡献合计</td><td className="px-3 py-2 text-right font-mono font-bold">{factorContribution.reduce((total, item) => total + item.contribution, 0).toFixed(1)}</td></tr></tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div><h3 className="text-sm font-bold text-slate-900">模型验证与稳健性</h3><p className="text-xs text-slate-500 mt-0.5">用于评价评分方法，不代表单只股票未来上涨概率。</p></div>
+          <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${scoringContext?.research_status?.passed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>{scoringContext?.research_status?.label || '未验证'}</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">样本外 MAE</span><strong>{scoringContext?.validation?.mae == null ? '--' : `${(scoringContext.validation.mae * 100).toFixed(2)}%`}</strong></div>
+          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">样本外 R²</span><strong>{fmtNum(scoringContext?.validation?.r2, 3)}</strong></div>
+          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">滚动 Rank IC</span><strong>{fmtNum(scoringContext?.backtest?.ic_mean, 3)}</strong></div>
+          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">Q5-Q1</span><strong>{scoringContext?.backtest?.q5_q1_mean_return == null ? '--' : `${(scoringContext.backtest.q5_q1_mean_return * 100).toFixed(2)}%`}</strong></div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-600">
+          <div className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>最大因子相关性</span><strong>{fmtNum(scoringContext?.diagnostics?.max_absolute_factor_correlation, 2)}</strong></div>
+          <div className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>最低排序相关性</span><strong>{fmtNum(scoringContext?.diagnostics?.minimum_rank_correlation, 2)}</strong></div>
+          <div className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>最低候选重合率</span><strong>{scoringContext?.diagnostics?.minimum_top_k_overlap == null ? '--' : `${(scoringContext.diagnostics.minimum_top_k_overlap * 100).toFixed(0)}%`}</strong></div>
+        </div>
+        {scoringContext?.importance?.length ? (
+          <div className="space-y-2">
+            <h4 className="text-xs font-bold text-slate-700">主要模型因子</h4>
+            {scoringContext.importance.slice(0, 6).map(item => {
+              const maxImportance = safeNum(scoringContext.importance[0]?.importance, 1);
+              const width = maxImportance > 0 ? safeNum(item.importance) / maxImportance * 100 : 0;
+              return <div key={item.feature} className="grid grid-cols-[120px_1fr_54px] items-center gap-2 text-[11px]"><span className="truncate text-slate-600" title={item.feature}>{item.feature}</span><div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-indigo-500" style={{ width: `${width}%` }} /></div><span className="text-right font-mono text-slate-500">{fmtNum(item.importance, 4)}</span></div>;
+            })}
+          </div>
+        ) : <p className="text-xs text-slate-400">重新运行综合评分后生成因子重要性。</p>}
+        {!!scoringContext?.research_status?.failed_reasons?.length && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">当前验证限制：{scoringContext.research_status.failed_reasons.slice(0, 3).join('；')}</div>}
       </div>
     </div>
   );

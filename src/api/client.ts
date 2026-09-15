@@ -1,4 +1,4 @@
-import { ScoredStock, WeightConfig, BacktestMetrics, BacktestCurvePoint, BacktestPeriod, ArchiveRun } from '../types';
+import { ScoredStock, WeightConfig, BacktestMetrics, BacktestCurvePoint, BacktestPeriod, ArchiveRun, ScoringConfig } from '../types';
 
 const API_BASE = '/api';
 
@@ -47,6 +47,17 @@ export interface TaskProgressResponse {
   message: string;
   error?: string | null;
   details?: any[];
+  elapsed_seconds?: number;
+  result?: { run_id: string; data_end: string; scored_count: number; candidate_count: number; archive: string };
+}
+
+export interface ScoringContextResponse {
+  manifest: any;
+  validation: any;
+  diagnostics: any;
+  research_status: any;
+  backtest: any;
+  importance: Array<{ feature: string; importance: number | null }>;
 }
 
 export interface GovernanceCheckItem {
@@ -186,12 +197,7 @@ export async function fetchLatestScores(): Promise<LatestScoresResponse | null> 
   }
 }
 
-export async function runScoring(payload: {
-  horizon?: number;
-  top_k?: number;
-  weights?: WeightConfig;
-  fetch_sentiment?: boolean;
-}): Promise<any> {
+export async function runScoring(payload: ScoringConfig & { weights: WeightConfig }): Promise<any> {
   const res = await fetch(API_BASE + '/scores/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -202,6 +208,15 @@ export async function runScoring(payload: {
     throw new Error(err.detail || '评分计算失败');
   }
   return await res.json();
+}
+
+export async function fetchScoringContext(): Promise<ScoringContextResponse | null> {
+  try {
+    const res = await fetch(API_BASE + '/scores/context');
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
 }
 export async function fetchUniverseIndustry(symbol: string): Promise<{ symbol: string; name: string; industry: string; source: string } | null> {
   try {

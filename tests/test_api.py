@@ -1,5 +1,6 @@
 ﻿from fastapi.testclient import TestClient
 import pytest
+import server
 from server import app
 
 client = TestClient(app)
@@ -57,6 +58,72 @@ def test_api_latest_scores():
     assert "positive_evidences" in stock
     assert "negative_evidences" in stock
     assert "credibility_stability" in stock
+    assert "conditional_sample_count" in stock
+    assert "limitations" in stock
+    assert "date" in stock
+
+
+def test_api_scoring_context():
+    res = client.get("/api/scores/context")
+    assert res.status_code == 200
+    data = res.json()
+    assert {"manifest", "validation", "diagnostics", "research_status", "backtest", "importance"}.issubset(data)
+    assert isinstance(data["importance"], list)
+
+
+def test_api_scoring_rejects_invalid_weights():
+    res = client.post("/api/scores/run", json={
+        "horizon": 20,
+        "top_k": 10,
+        "weights": {
+            "model": 0.35,
+            "technical": 0.25,
+            "volume_price": 0.20,
+            "candle": 0.10,
+            "sentiment": 0.20,
+        },
+        "fetch_sentiment": False,
+    })
+    assert res.status_code == 422
+    assert "100%" in res.json()["detail"]
+
+
+def test_api_scoring_starts_background_worker(monkeypatch):
+    captured = {}
+
+    def store_status(task_id, status):
+        server._TASK_STATUS[task_id] = status
+
+    def fake_worker(task_id, payload):
+        captured["task_id"] = task_id
+        captured["horizon"] = payload.horizon
+        captured["top_k"] = payload.top_k
+        captured["fetch_sentiment"] = payload.fetch_sentiment
+        server._TASK_STATUS[task_id]["running"] = False
+
+    server._TASK_STATUS.clear()
+    monkeypatch.setattr(server, "_store_task_status", store_status)
+    monkeypatch.setattr(server, "_background_scoring", fake_worker)
+    res = client.post("/api/scores/run", json={
+        "horizon": 10,
+        "top_k": 5,
+        "weights": {
+            "model": 0.35,
+            "technical": 0.25,
+            "volume_price": 0.20,
+            "candle": 0.10,
+            "sentiment": 0.10,
+        },
+        "fetch_sentiment": False,
+    })
+    assert res.status_code == 200
+    assert captured == {
+        "task_id": res.json()["task_id"],
+        "horizon": 10,
+        "top_k": 5,
+        "fetch_sentiment": False,
+    }
+    server._TASK_STATUS.clear()
 
 def test_api_latest_backtest():
     res = client.get("/api/backtest/latest")

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import shutil
 import threading
 import time
 from datetime import datetime
@@ -28,14 +29,17 @@ from stock_model.research import (
 )
 from stock_model.export import candidate_export_workbook, export_pdf_report
 from stock_model.pool import parse_pool_text
-from stock_model.governance import assess_research_status
-from stock_model.quality import audit_market_data
+from stock_model.governance import assess_research_status, data_fingerprint, new_run_id, write_run_manifest
+from stock_model.quality import a_share_equity_mask, audit_market_data
 from stock_model.metadata import (
+    apply_historical_universe,
     load_metadata_history,
     load_universe_history,
+    metadata_coverage,
     metadata_history_audit,
     universe_history_audit,
 )
+from stock_model.research import load_score_history, merge_asof_metadata
 from fastapi.responses import Response
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -47,6 +51,8 @@ OUTPUT_DIR = BASE_DIR / 'output'
 DIST_DIR = BASE_DIR / 'dist'
 POOL_PATH = REF_DATA_DIR / 'local_stock_pool.csv'
 UNIVERSE_PATH = REF_DATA_DIR / 'a_share_universe.parquet'
+FEATURE_VERSION = 'technical_features_v1'
+MODEL_VERSION = 'walk_forward_lightgbm_v1'
 
 app = FastAPI(
     title='Stock Selection Model API',
@@ -77,16 +83,16 @@ class PoolBatchRequest(BaseModel):
 
 
 class WeightConfigModel(BaseModel):
-    model: float = 0.35
-    technical: float = 0.25
-    volume_price: float = 0.20
-    candle: float = 0.10
-    sentiment: float = 0.10
+    model: float = Field(default=0.35, ge=0, le=1)
+    technical: float = Field(default=0.25, ge=0, le=1)
+    volume_price: float = Field(default=0.20, ge=0, le=1)
+    candle: float = Field(default=0.10, ge=0, le=1)
+    sentiment: float = Field(default=0.10, ge=0, le=1)
 
 
 class ScoringRunRequest(BaseModel):
-    horizon: int = 20
-    top_k: int = 10
+    horizon: int = Field(default=20, ge=5, le=60)
+    top_k: int = Field(default=10, ge=5, le=50)
     weights: Optional[WeightConfigModel] = None
     fetch_sentiment: bool = True
 
@@ -115,6 +121,33 @@ def safe_float(val: Any, default: float = 0.0) -> float:
         return default if (math.isnan(f) or math.isinf(f)) else f
     except (ValueError, TypeError):
         return default
+
+
+def optional_float(val: Any, digits: Optional[int] = None) -> Optional[float]:
+    if val is None or pd.isna(val):
+        return None
+    try:
+        number = float(val)
+    except (ValueError, TypeError):
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return round(number, digits) if digits is not None else number
+
+
+def optional_int(val: Any) -> Optional[int]:
+    number = optional_float(val)
+    return int(number) if number is not None else None
+
+
+def optional_text(*values: Any) -> str:
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text and text.lower() not in {'nan', 'none', '<na>'}:
+            return text
+    return ''
 
 
 def _determine_market(symbol: str) -> str:
@@ -181,6 +214,76 @@ def _market_data_freshness() -> Dict[str, Any]:
         'updated_symbols': len(latest_dates),
         'stale_symbols': sum(date < newest for date in latest_dates),
     }
+
+
+def _load_json(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+
+
+def _governed_research_panel(panel: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, Any], Dict[str, Any]]:
+    panel = panel.loc[a_share_equity_mask(panel['symbol'])].copy()
+    universe_history = load_universe_history(ARCHIVE_DATA_DIR)
+    universe_audit = universe_history_audit(universe_history, panel['date'].min(), panel['date'].max())
+    governed = apply_historical_universe(panel, universe_history)
+    metadata = load_metadata_history(ARCHIVE_DATA_DIR)
+    governed = merge_asof_metadata(governed, metadata)
+    metadata_audit = metadata_coverage(governed)
+    source_audit = metadata_coverage(metadata)
+    metadata_audit['archive_snapshot_start'] = source_audit.get('snapshot_start')
+    metadata_audit['archive_snapshot_end'] = source_audit.get('snapshot_end')
+    return governed, metadata_audit, universe_audit
+
+
+def _archive_run_artifacts(run_id: str) -> Path:
+    target = OUTPUT_DIR / 'runs' / run_id
+    target.mkdir(parents=True, exist_ok=True)
+    manifest = OUTPUT_DIR / 'runs' / f'{run_id}.json'
+    if manifest.exists():
+        shutil.copy2(manifest, target / 'manifest.json')
+    for name in ('latest_scores.csv', 'latest_picks.csv', 'validation_metrics.json', 'score_diagnostics.json', 'feature_importance.csv'):
+        source = OUTPUT_DIR / name
+        if source.exists():
+            shutil.copy2(source, target / name)
+    return target
+
+
+def _archive_score_snapshot(scores: pd.DataFrame) -> str:
+    ARCHIVE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now()
+    snapshot = scores.copy()
+    if 'archive_time' in snapshot:
+        snapshot = snapshot.drop(columns=['archive_time'])
+    snapshot.insert(0, 'archive_time', stamp.strftime('%Y-%m-%d %H:%M:%S'))
+    day_path = ARCHIVE_DATA_DIR / f'scores_{stamp:%Y%m%d}.csv'
+    snapshot.to_csv(day_path, index=False, encoding='utf-8-sig')
+    load_score_history(ARCHIVE_DATA_DIR).to_csv(
+        ARCHIVE_DATA_DIR / 'scores_history.csv', index=False, encoding='utf-8-sig'
+    )
+    return day_path.name
+
+
+def _task_path(task_id: str) -> Path:
+    return OUTPUT_DIR / 'tasks' / f'{task_id}.json'
+
+
+def _store_task_status(task_id: str, status: Dict[str, Any]) -> None:
+    status = {**status, 'updated_at': datetime.now().astimezone().isoformat(timespec='seconds')}
+    with _TASK_LOCK:
+        _TASK_STATUS[task_id] = status
+    path = _task_path(task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def _read_task_status(task_id: str) -> Optional[Dict[str, Any]]:
+    with _TASK_LOCK:
+        status = _TASK_STATUS.get(task_id)
+    return status or _load_json(_task_path(task_id)) or None
 
 def load_latest_market_sentiment() -> Dict[str, Any]:
     path = ARCHIVE_DATA_DIR / 'market_sentiment.csv'
@@ -251,9 +354,10 @@ def get_system_status() -> Dict[str, Any]:
         'market_sentiment': sentiment,
         'latest_score_run': {
             'run_id': latest_manifest.get('run_id'),
-            'date': latest_manifest.get('created_at', '')[:10] if latest_manifest else None,
+            'date': latest_manifest.get('data_end'),
             'created_at': latest_manifest.get('created_at'),
-            'top_symbols': [p.get('symbol') for p in latest_manifest.get('picks', [])][:5],
+            'top_symbols': [p.get('symbol') for p in latest_manifest.get('candidate_snapshot', latest_manifest.get('picks', []))][:5],
+            'uses_latest_market_data': bool(latest_manifest.get('data_end') and latest_manifest.get('data_end') == market_data.get('latest_date')),
         },
     }
 
@@ -522,7 +626,7 @@ def repair_data_quality() -> Dict[str, Any]:
 
 @app.get('/api/scores/latest')
 def get_latest_scores() -> Dict[str, Any]:
-    scores_file = OUTPUT_DIR / 'latest_scores.csv'
+    scores_file = OUTPUT_DIR / 'latest_picks.csv'
     manifest_file = OUTPUT_DIR / 'latest_score_manifest.json'
 
     if not scores_file.exists():
@@ -533,12 +637,7 @@ def get_latest_scores() -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f'Failed to read scores: {exc}')
 
-    manifest = {}
-    if manifest_file.exists():
-        try:
-            manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
-        except Exception:
-            pass
+    manifest = _load_json(manifest_file)
 
     universe = _load_universe_df()
     u_map = universe.set_index('symbol').to_dict('index') if not universe.empty else {}
@@ -547,57 +646,95 @@ def get_latest_scores() -> Dict[str, Any]:
     for idx, row in df.iterrows():
         sym = str(row['symbol']).zfill(6)
         u_info = u_map.get(sym, {})
-        change_val = row.get('涨跌幅')
-        if pd.isna(change_val) or change_val is None:
-            change_val = safe_float(row.get('daily_return')) * 100.0
-        change = round(safe_float(change_val, 0.0), 2)
-        price = round(safe_float(row.get('close'), 10.0), 2)
-        turnover = round(safe_float(row.get('turnover')), 2)
-        comp_score = round(safe_float(row.get('composite_score'), 50.0), 1)
+        change = optional_float(row.get('涨跌幅'), 2)
+        if change is None:
+            daily_return = optional_float(row.get('daily_return'))
+            change = round(daily_return * 100, 2) if daily_return is not None else None
+        factor_values = {
+            '模型评分': optional_float(row.get('model_score'), 1),
+            '技术评分': optional_float(row.get('technical_score'), 1),
+            '量价评分': optional_float(row.get('volume_price_score'), 1),
+            'K线评分': optional_float(row.get('candle_score'), 1),
+            '舆情评分': optional_float(row.get('sentiment_score'), 1),
+        }
+        available_factors = [(name, value) for name, value in factor_values.items() if value is not None]
+        strongest = sorted(available_factors, key=lambda item: item[1], reverse=True)[:2]
+        weakest = sorted(available_factors, key=lambda item: item[1])[:2]
+        conditional_count = optional_int(row.get('conditional_sample_count'))
+        conditional_return = optional_float(row.get('conditional_expected_return'))
+        conditional_win = optional_float(row.get('conditional_win_rate'))
+        positive_evidences = [
+            f'{name} {value:.1f}，是当前排序的主要正向来源'
+            for name, value in strongest if value >= 50
+        ]
+        negative_evidences = [
+            f'{name} {value:.1f}，对当前排序形成拖累'
+            for name, value in weakest if value < 50
+        ]
+        if conditional_return is not None:
+            target = positive_evidences if conditional_return > 0 else negative_evidences
+            target.append(f'相似高分历史样本的条件期望收益为 {conditional_return:.2%}')
+        if conditional_win is not None:
+            target = positive_evidences if conditional_win > 0.5 else negative_evidences
+            target.append(f'相似高分历史样本的条件胜率为 {conditional_win:.1%}')
+        industry = optional_text(row.get('industry'), u_info.get('industry'))
+        market_cap = optional_float(row.get('market_cap'))
+        limitations: List[str] = []
+        if conditional_count is None:
+            limitations.append('条件高分历史样本尚未积累')
+        elif conditional_count < 10:
+            limitations.append(f'独立条件样本仅 {conditional_count} 个，区间估计不稳定')
+        if not industry or market_cap is None:
+            limitations.append('行业或市值字段不完整，暴露判断可能受限')
+        validation_status = manifest.get('validation_status', {})
+        if not validation_status.get('passed'):
+            limitations.append(f'当前策略验证等级为{validation_status.get("label", "未验证")}')
 
         stocks.append({
+            'date': str(row.get('date') or '')[:10],
             'symbol': sym,
             'name': str(row.get('name') or u_info.get('name') or sym),
             'pinyin': _search_pinyin(u_info),
-            'industry': str(row.get('industry') or '综合'),
+            'industry': industry,
             'market': _determine_market(sym),
-            'price': price,
+            'price': optional_float(row.get('close'), 2),
             'change': change,
-            'turnover': turnover,
-            'volume': safe_float(row.get('volume')),
-            'amount': safe_float(row.get('amount')),
-            'pe_ttm': round(safe_float(row.get('pe_ttm'), 20.0), 2),
-            'pb': round(safe_float(row.get('pb'), 2.0), 2),
-            'model_raw': safe_float(row.get('model_score', 50.0)) / 100.0,
-            'model_score': round(safe_float(row.get('model_score'), 50.0), 1),
-            'technical_score': round(safe_float(row.get('technical_score'), 50.0), 1),
-            'volume_price_score': round(safe_float(row.get('volume_price_score'), 50.0), 1),
-            'candle_score': round(safe_float(row.get('candle_score'), 50.0), 1),
-            'sentiment_score': round(safe_float(row.get('sentiment_score'), 50.0), 1),
-            'sentiment_source': str(row.get('sentiment_source') or '关键词新闻评分'),
-            'news_count': int(safe_float(row.get('news_count'), 0)),
-            'composite_score': comp_score,
+            'turnover': optional_float(row.get('turnover'), 2),
+            'volume': optional_float(row.get('volume')),
+            'amount': optional_float(row.get('amount')),
+            'pe_ttm': optional_float(row.get('pe_ttm'), 2),
+            'pb': optional_float(row.get('pb'), 2),
+            'market_cap': market_cap,
+            'model_raw': optional_float(row.get('model_raw'), 6),
+            'model_score': factor_values['模型评分'],
+            'technical_score': factor_values['技术评分'],
+            'volume_price_score': factor_values['量价评分'],
+            'candle_score': factor_values['K线评分'],
+            'sentiment_score': factor_values['舆情评分'],
+            'sentiment_source': optional_text(row.get('sentiment_source')),
+            'news_count': optional_int(row.get('news_count')),
+            'composite_score': optional_float(row.get('composite_score'), 1),
             'rank': int(safe_float(row.get('rank'), idx + 1)),
-            'odds_reward_risk': round(safe_float(row.get('odds_reward_risk'), 2.0), 2),
-            'odds_win_rate': round(safe_float(row.get('odds_win_rate'), 55.0), 1),
-            'odds_expected_return': round(safe_float(row.get('odds_expected_return'), 5.0), 1),
-            'diagnostic_status': str(row.get('diagnostic_status') or 'good'),
-            'diagnostic_message': str(row.get('diagnostic_message') or '正常观察'),
-            'trading_days': int(safe_float(row.get('trading_days'), 250)),
-            'credibility_score': round(safe_float(row.get('credibility_score'), 70.0), 1),
-            'credibility_grade': str(row.get('credibility_grade') or '中'),
-            'credibility_stability': round(safe_float(row.get('credibility_stability'), 80.0), 1),
-            'credibility_agreement': round(safe_float(row.get('credibility_agreement'), 75.0), 1),
-            'high_52w': round(safe_float(row.get('high_52w'), price * 1.3), 2),
-            'low_52w': round(safe_float(row.get('low_52w'), price * 0.7), 2),
-            'positive_evidences': [
-                f'综合评分 {comp_score:.1f}，进入本次前向观察名单',
-                f'多因子模型排序分 {round(safe_float(row.get("model_score"), 50.0), 1)}',
-            ],
-            'negative_evidences': [
-                '请严格控制单笔仓位与调仓滑点摩擦',
-                '历史回测表现不代表未来真实收益',
-            ],
+            'rank_change': optional_text(row.get('rank_change')) or '-',
+            'odds_sample_count': optional_int(row.get('odds_sample_count')),
+            'odds_reward_risk': optional_float(row.get('odds_reward_risk'), 2),
+            'odds_win_rate': round(float(row.get('odds_win_rate')) * 100, 1) if optional_float(row.get('odds_win_rate')) is not None else None,
+            'odds_expected_return': round(float(row.get('odds_expected_return')) * 100, 2) if optional_float(row.get('odds_expected_return')) is not None else None,
+            'conditional_sample_count': conditional_count,
+            'conditional_win_rate': conditional_win,
+            'conditional_win_rate_low': optional_float(row.get('conditional_win_rate_low')),
+            'conditional_win_rate_high': optional_float(row.get('conditional_win_rate_high')),
+            'conditional_expected_return': conditional_return,
+            'conditional_return_low': optional_float(row.get('conditional_return_low')),
+            'conditional_return_high': optional_float(row.get('conditional_return_high')),
+            'credibility_score': optional_float(row.get('credibility_score'), 1),
+            'credibility_grade': optional_text(row.get('credibility_grade')),
+            'credibility_stability': optional_float(row.get('credibility_stability'), 1),
+            'credibility_agreement': optional_float(row.get('credibility_agreement'), 1),
+            'positive_evidences': positive_evidences,
+            'negative_evidences': negative_evidences,
+            'limitations': limitations,
+            'data_complete': bool(industry and market_cap is not None),
         })
 
     return {
@@ -608,57 +745,175 @@ def get_latest_scores() -> Dict[str, Any]:
     }
 
 
+@app.get('/api/scores/context')
+def get_scoring_context() -> Dict[str, Any]:
+    importance_file = OUTPUT_DIR / 'feature_importance.csv'
+    importance: List[Dict[str, Any]] = []
+    if importance_file.exists():
+        frame = pd.read_csv(importance_file).head(15)
+        importance = [
+            {'feature': str(row.get('feature') or ''), 'importance': optional_float(row.get('importance'))}
+            for _, row in frame.iterrows()
+        ]
+    return {
+        'manifest': _load_json(OUTPUT_DIR / 'latest_score_manifest.json'),
+        'validation': _load_json(OUTPUT_DIR / 'validation_metrics.json'),
+        'diagnostics': _load_json(OUTPUT_DIR / 'score_diagnostics.json'),
+        'research_status': _load_json(OUTPUT_DIR / 'research_status.json'),
+        'backtest': _load_json(OUTPUT_DIR / 'backtest_metrics.json'),
+        'importance': importance,
+    }
+
+
 def _background_scoring(task_id: str, payload: ScoringRunRequest) -> None:
-    def stage(message: str) -> None:
-        with _TASK_LOCK:
-            status = _TASK_STATUS.get(task_id, {})
-            details = list(status.get('details', []))
-            details.append({'stage': message, 'status': '进行中'})
-            _TASK_STATUS[task_id] = {'running': True, 'percent': min(95.0, 10.0 + len(details) * 12.0), 'message': message, 'error': None, 'details': details}
+    started_at = time.time()
+
+    def stage(stage_id: str, message: str, percent: float) -> None:
+        status = _read_task_status(task_id) or {}
+        details = list(status.get('details', []))
+        for detail in details:
+            if detail.get('kind') == 'stage' and detail.get('status') == '进行中':
+                detail['status'] = '完成'
+                detail['finished_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+        if not any(detail.get('id') == stage_id for detail in details):
+            details.append({
+                'id': stage_id, 'kind': 'stage', 'stage': message, 'status': '进行中',
+                'started_at': datetime.now().astimezone().isoformat(timespec='seconds'),
+            })
+        _store_task_status(task_id, {
+            **status, 'running': True, 'percent': percent, 'message': message,
+            'error': None, 'details': details, 'elapsed_seconds': round(time.time() - started_at, 1),
+        })
+
+    def research_stage(message: str) -> None:
+        if '样本外' in message:
+            stage('validation', '阶段 5/9：样本外验证训练', 40.0)
+        elif '全量训练' in message:
+            stage('training', '阶段 6/9：全量训练与逐股舆情抓取', 55.0)
+        elif '综合评分' in message:
+            stage('scoring', '阶段 7/9：计算综合评分与条件证据', 82.0)
 
     def sentiment_progress(current: int, total: int, symbol: str) -> None:
-        with _TASK_LOCK:
-            status = _TASK_STATUS.get(task_id, {})
-            details = list(status.get('details', []))
-            details.append({'stage': '舆情抓取', 'symbol': symbol, 'status': f'{current}/{total}'})
-            _TASK_STATUS[task_id] = {'running': True, 'percent': min(90.0, 45.0 + current / max(1, total) * 35.0), 'message': f'舆情抓取 [{current}/{total}] {symbol}', 'error': None, 'details': details}
+        status = _read_task_status(task_id) or {}
+        details = list(status.get('details', []))
+        details.append({'id': f'sentiment-{current}', 'kind': 'symbol', 'stage': '舆情抓取', 'symbol': symbol, 'status': '完成', 'current': current, 'total': total})
+        _store_task_status(task_id, {
+            **status, 'running': True, 'current': current, 'total': total,
+            'percent': min(80.0, 58.0 + current / max(1, total) * 22.0),
+            'message': f'舆情抓取 [{current}/{total}] {symbol}', 'error': None,
+            'details': details, 'elapsed_seconds': round(time.time() - started_at, 1),
+        })
 
     try:
-        stage('阶段 1/4：加载股票池与行情数据')
+        previous_picks = pd.read_csv(OUTPUT_DIR / 'latest_picks.csv', dtype={'symbol': str}) if (OUTPUT_DIR / 'latest_picks.csv').exists() else pd.DataFrame()
+        stage('preflight', '阶段 1/9：检查评分配置与股票池', 5.0)
         symbols = _pool_symbols()
         if not symbols:
             raise ValueError('股票池为空')
+        stage('load-data', '阶段 2/9：加载股票池行情数据', 12.0)
         panel = _load_pool_panel(symbols)
         if panel.empty:
             raise ValueError('未找到股票池对应的行情数据')
-        stage('阶段 2/4：构建技术与量价特征')
+        stage('governance', '阶段 3/9：执行历史股票池与元数据治理', 20.0)
+        panel, metadata_audit, universe_audit = _governed_research_panel(panel)
+        stage('features', '阶段 4/9：构建技术、量价与K线因子', 30.0)
         frame, features = build_features(panel, horizon=payload.horizon)
-        stage('阶段 3/4：滚动前向训练与舆情抓取')
         weights_dict = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
-        run_latest_research(frame=frame, features=features, top_k=payload.top_k, horizon=payload.horizon, output_dir=OUTPUT_DIR, weights=weights_dict, fetch_sentiment=payload.fetch_sentiment, progress=stage, sentiment_progress=sentiment_progress)
-        stage('阶段 4/4：综合评分与结果输出')
-        with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'percent': 100.0, 'message': '评分完成，结果已写入研究记录', 'error': None, 'details': _TASK_STATUS.get(task_id, {}).get('details', [])}
+        _, metrics, _ = run_latest_research(
+            frame=frame, features=features, top_k=payload.top_k, horizon=payload.horizon,
+            output_dir=OUTPUT_DIR, weights=weights_dict, fetch_sentiment=payload.fetch_sentiment,
+            progress=research_stage, sentiment_progress=sentiment_progress,
+        )
+        stage('persist', '阶段 8/9：保存评分、证据与运行清单', 88.0)
+        run_id = new_run_id('score')
+        all_scores = pd.read_csv(OUTPUT_DIR / 'latest_scores.csv', dtype={'symbol': str})
+        all_scores['symbol'] = all_scores['symbol'].astype(str).str.zfill(6)
+        all_scores = all_scores.sort_values('composite_score', ascending=False).reset_index(drop=True)
+        all_scores['rank'] = all_scores.index + 1
+        previous_ranks = {}
+        if not previous_picks.empty:
+            previous_picks['symbol'] = previous_picks['symbol'].astype(str).str.zfill(6)
+            previous_picks = previous_picks.sort_values('composite_score', ascending=False)
+            previous_ranks = {symbol: rank for rank, symbol in enumerate(previous_picks['symbol'], start=1)}
+        all_scores['rank_change'] = [
+            '新进' if symbol not in previous_ranks else f'{previous_ranks[symbol] - rank:+d}'
+            for rank, symbol in zip(all_scores['rank'], all_scores['symbol'])
+        ]
+        all_scores['run_id'] = run_id
+        picks = all_scores.head(payload.top_k).copy()
+        all_scores.to_csv(OUTPUT_DIR / 'latest_scores.csv', index=False, encoding='utf-8-sig')
+        picks.to_csv(OUTPUT_DIR / 'latest_picks.csv', index=False, encoding='utf-8-sig')
+        config = {
+            'horizon': payload.horizon, 'top_k': payload.top_k, 'weights': weights_dict,
+            'weight_mode': '自定义', 'fetch_sentiment': payload.fetch_sentiment,
+            'sentiment_mode': 'latest_news' if payload.fetch_sentiment else 'neutral',
+            'feature_version': FEATURE_VERSION, 'model_version': MODEL_VERSION,
+            'universe_count': int(panel['symbol'].nunique()),
+        }
+        metrics.update({'schema_version': 2, 'run_id': run_id, 'config': config})
+        (OUTPUT_DIR / 'validation_metrics.json').write_text(json.dumps(metrics, ensure_ascii=False, indent=2), encoding='utf-8')
+        backtest = _load_json(OUTPUT_DIR / 'backtest_metrics.json')
+        validation_status = assess_research_status(backtest, metrics, metadata_audit, universe_audit)
+        (OUTPUT_DIR / 'research_status.json').write_text(json.dumps(validation_status, ensure_ascii=False, indent=2), encoding='utf-8')
+        data_end = str(pd.Timestamp(panel['date'].max()).date())
+        manifest = {
+            'run_id': run_id, 'kind': 'score', 'config': config, 'data_end': data_end,
+            'data_fingerprint': data_fingerprint(list(RAW_DATA_DIR.glob('*.parquet'))),
+            'governance_fingerprint': data_fingerprint([
+                *ARCHIVE_DATA_DIR.glob('metadata_*.csv'), *ARCHIVE_DATA_DIR.glob('universe_*.csv')
+            ]),
+            'candidate_snapshot': picks[[column for column in ('symbol', 'name', 'composite_score', 'credibility_grade') if column in picks]].to_dict('records'),
+            'metadata_audit': metadata_audit, 'universe_audit': universe_audit,
+            'validation_status': validation_status,
+        }
+        write_run_manifest(OUTPUT_DIR, manifest)
+        archive_name = _archive_score_snapshot(all_scores)
+        _archive_run_artifacts(run_id)
+        stage('complete', '阶段 9/9：评分完成并归档', 100.0)
+        status = _read_task_status(task_id) or {}
+        details = list(status.get('details', []))
+        for detail in details:
+            if detail.get('status') == '进行中':
+                detail['status'] = '完成'
+        _store_task_status(task_id, {
+            **status, 'running': False, 'percent': 100.0,
+            'message': f'评分完成：{len(all_scores)} 只参与，输出 {len(picks)} 只观察标的',
+            'error': None, 'details': details, 'elapsed_seconds': round(time.time() - started_at, 1),
+            'result': {'run_id': run_id, 'data_end': data_end, 'scored_count': len(all_scores), 'candidate_count': len(picks), 'archive': archive_name},
+        })
     except Exception as exc:
-        with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'message': f'评分失败: {exc}', 'error': str(exc), 'details': _TASK_STATUS.get(task_id, {}).get('details', [])}
+        status = _read_task_status(task_id) or {}
+        details = list(status.get('details', []))
+        for detail in details:
+            if detail.get('status') == '进行中':
+                detail['status'] = '失败'
+                detail['error'] = str(exc)
+        _store_task_status(task_id, {
+            **status, 'running': False, 'message': f'评分失败: {exc}', 'error': str(exc),
+            'details': details, 'elapsed_seconds': round(time.time() - started_at, 1),
+        })
 
 
 @app.post('/api/scores/run')
 def run_scoring(payload: ScoringRunRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
     if not _pool_symbols():
         raise HTTPException(status_code=400, detail='Stock pool is empty')
-    task_id = f'score_{int(time.time())}'
+    weights = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
+    if abs(sum(weights.values()) - 1.0) > 0.001:
+        raise HTTPException(status_code=422, detail='评分权重合计必须为 100%')
     with _TASK_LOCK:
-        _TASK_STATUS[task_id] = {'running': True, 'percent': 0.0, 'message': '评分任务初始化...', 'error': None, 'details': []}
+        active = next((task for task, status in _TASK_STATUS.items() if '_score_task_' in task and status.get('running')), None)
+    if active:
+        raise HTTPException(status_code=409, detail=f'已有评分任务正在运行: {active}')
+    task_id = new_run_id('score_task')
+    _store_task_status(task_id, {'running': True, 'percent': 0.0, 'message': '评分任务初始化...', 'error': None, 'details': [], 'started_at': datetime.now().astimezone().isoformat(timespec='seconds')})
     background_tasks.add_task(_background_scoring, task_id, payload)
     return {'ok': True, 'task_id': task_id, 'message': '评分任务已启动'}
 
 
 @app.get('/api/scores/run-progress')
 def get_scoring_progress(task_id: str = Query(...)) -> Dict[str, Any]:
-    with _TASK_LOCK:
-        status = _TASK_STATUS.get(task_id)
+    status = _read_task_status(task_id)
     if not status:
         return {'running': False, 'percent': 100.0, 'message': '未找到任务或任务已结束', 'error': None, 'details': []}
     return status

@@ -24,6 +24,7 @@ export interface MarketQuote {
 }
 
 export interface ScoredStock extends StockBasic, MarketQuote {
+  date?: string;
   model_raw: number;
   model_score: number;
   technical_score: number;
@@ -34,6 +35,8 @@ export interface ScoredStock extends StockBasic, MarketQuote {
   news_count?: number;
   composite_score: number;
   rank: number;
+  rank_change?: string;
+  odds_sample_count?: number | null;
   odds_reward_risk: number;
   odds_win_rate: number;
   odds_expected_return: number;
@@ -44,6 +47,15 @@ export interface ScoredStock extends StockBasic, MarketQuote {
   credibility_grade?: string;
   credibility_stability?: number;
   credibility_agreement?: number;
+  conditional_sample_count?: number | null;
+  conditional_win_rate?: number | null;
+  conditional_win_rate_low?: number | null;
+  conditional_win_rate_high?: number | null;
+  conditional_expected_return?: number | null;
+  conditional_return_low?: number | null;
+  conditional_return_high?: number | null;
+  limitations?: string[];
+  data_complete?: boolean;
   positive_evidences?: string[];
   negative_evidences?: string[];
 }
@@ -54,6 +66,12 @@ export interface WeightConfig {
   volume_price: number;
   candle: number;
   sentiment: number;
+}
+
+export interface ScoringConfig {
+  horizon: number;
+  top_k: number;
+  fetch_sentiment: boolean;
 }
 
 export interface BacktestConfig {
