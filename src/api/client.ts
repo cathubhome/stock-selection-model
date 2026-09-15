@@ -1,4 +1,4 @@
-﻿import { ScoredStock, WeightConfig, BacktestMetrics, BacktestCurvePoint, BacktestPeriod, ArchiveRun } from '../types';
+import { ScoredStock, WeightConfig, BacktestMetrics, BacktestCurvePoint, BacktestPeriod, ArchiveRun } from '../types';
 
 const API_BASE = '/api';
 
@@ -124,8 +124,12 @@ export async function searchUniverse(q: string, limit = 20): Promise<any[]> {
   }
 }
 
-export async function startDataDownload(): Promise<{ ok: boolean; task_id?: string; symbols_count?: number }> {
-  const res = await fetch(API_BASE + '/data/download', { method: 'POST' });
+export async function startDataDownload(payload: { scope?: 'pool' | 'top_amount'; top_n?: number; mode?: 'incremental' | 'full'; start_date?: string; end_date?: string } = {}): Promise<{ ok: boolean; task_id?: string; symbols_count?: number }> {
+  const res = await fetch(API_BASE + '/data/download', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: '下载启动失败' }));
     throw new Error(err.detail || '下载启动失败');
@@ -214,6 +218,23 @@ export async function runBacktest(payload: {
     throw new Error(err.detail || '回测运行失败');
   }
   return await res.json();
+}
+export async function fetchResearchLinkage(): Promise<any | null> {
+  try {
+    const res = await fetch(API_BASE + '/research/linkage');
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchStockHistory(symbol: string, days = 120): Promise<any | null> {
+  try {
+    const res = await fetch(API_BASE + '/stock/' + encodeURIComponent(symbol) + '/history?days=' + days);
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchGovernanceStatus(): Promise<GovernanceStatusResponse | null> {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   ArrowRight, 
   CheckCircle2, 
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { ScoredStock, ResearchStep } from '../types';
 import { LATEST_MARKET_SENTIMENT, REMOTE_METADATA_STATUS } from '../data/remoteArchiveData';
+import { fetchResearchLinkage, fetchSystemStatus, SystemStatusResponse } from '../api/client';
 
 interface ResearchDashboardViewProps {
   stocks: ScoredStock[];
@@ -25,7 +26,17 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
   onNavigate,
   onSelectStock,
 }) => {
+  const [status, setStatus] = useState<SystemStatusResponse | null>(null);
+  const [linkage, setLinkage] = useState<any | null>(null);
+
+  useEffect(() => {
+    fetchSystemStatus().then(setStatus);
+    fetchResearchLinkage().then(setLinkage);
+  }, []);
+
   const topStocks = stocks.slice(0, 5);
+  const marketSentiment = status?.market_sentiment || LATEST_MARKET_SENTIMENT;
+  const metadataStatus = status?.metadata_status || REMOTE_METADATA_STATUS;
 
   return (
     <div className="space-y-6">
@@ -36,7 +47,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
           <div className="space-y-2 max-w-2xl">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-300 text-xs font-medium border border-indigo-400/30">
               <Activity className="w-3.5 h-3.5" />
-              <span>数据截至 2026-09-05 · 运行已归档</span>
+              <span>数据截至 {linkage?.score_data_end || status?.latest_score_run?.date || '--'} · {linkage?.ready_for_decision ? '评分与回测一致' : '请核对研究链路'}</span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
               A股量化多因子选股研究工作台
@@ -85,7 +96,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
             1. 本地池与行情数据
           </h3>
           <p className="text-xs text-slate-500 mt-1.5">
-            当前本地股票池共 <strong>{stocks.length}</strong> 只标的，行业覆盖率 {(REMOTE_METADATA_STATUS.industry_coverage * 100).toFixed(1)}%，无未来函数。
+            当前本地股票池共 <strong>{stocks.length}</strong> 只标的，行业覆盖率 {(metadataStatus.industry_coverage * 100).toFixed(1)}%，无未来函数。
           </p>
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-indigo-600 font-medium">
             <span>进入股票池与质量诊断</span>
@@ -153,15 +164,15 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
               <Activity className="w-4 h-4 text-indigo-600" />
               <h4 className="font-bold text-slate-900 text-sm">市场情绪指数 (Market Sentiment)</h4>
             </div>
-            <span className="text-xs text-slate-500">{LATEST_MARKET_SENTIMENT.date}</span>
+            <span className="text-xs text-slate-500">{marketSentiment.date}</span>
           </div>
 
           <div className="flex items-baseline space-x-3 mb-3">
             <div className="text-3xl font-extrabold text-slate-900">
-              {LATEST_MARKET_SENTIMENT.score.toFixed(1)}
+              {marketSentiment.score.toFixed(1)}
             </div>
             <span className="text-xs px-2 py-0.5 rounded font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-              {LATEST_MARKET_SENTIMENT.status}
+              {marketSentiment.status}
             </span>
           </div>
 
@@ -169,7 +180,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
           <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mb-4">
             <div 
               className="h-full bg-gradient-to-r from-amber-500 to-emerald-500 rounded-full"
-              style={{ width: `${LATEST_MARKET_SENTIMENT.score}%` }}
+              style={{ width: `${marketSentiment.score}%` }}
             ></div>
           </div>
 
@@ -178,19 +189,19 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
             <div className="bg-slate-50 p-2 rounded-lg">
               <span className="text-[11px] text-slate-500 block">上涨家数占比</span>
               <strong className="text-xs font-semibold text-slate-800">
-                {(LATEST_MARKET_SENTIMENT.breadth * 100).toFixed(1)}%
+                {(marketSentiment.breadth * 100).toFixed(1)}%
               </strong>
             </div>
             <div className="bg-slate-50 p-2 rounded-lg">
               <span className="text-[11px] text-slate-500 block">全市场量能比</span>
               <strong className="text-xs font-semibold text-slate-800">
-                {LATEST_MARKET_SENTIMENT.volume_ratio.toFixed(2)}x
+                {marketSentiment.volume_ratio.toFixed(2)}x
               </strong>
             </div>
             <div className="bg-slate-50 p-2 rounded-lg">
               <span className="text-[11px] text-slate-500 block">涨停家数占比</span>
               <strong className="text-xs font-semibold text-slate-800">
-                {(LATEST_MARKET_SENTIMENT.limit_up_ratio * 100).toFixed(1)}%
+                {(marketSentiment.limit_up_ratio * 100).toFixed(1)}%
               </strong>
             </div>
           </div>
@@ -221,7 +232,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
             <div className="border border-slate-100 rounded-lg p-3 bg-slate-50/50">
               <span className="text-xs text-slate-500">行业覆盖率</span>
               <p className="text-lg font-bold text-slate-900 mt-0.5">
-                {(REMOTE_METADATA_STATUS.industry_coverage * 100).toFixed(1)}%
+                {(metadataStatus.industry_coverage * 100).toFixed(1)}%
               </p>
               <span className="text-[10px] text-slate-500">申万一级行业</span>
             </div>

@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from stock_model.benchmarks import prepare_benchmark_returns
-from stock_model.data import get_symbols, load_panel, update_histories
+from stock_model.data import download_histories, get_symbols, load_panel, update_histories
 from stock_model.features import build_features
 from stock_model.metadata import fetch_current_metadata, latest_metadata_snapshot
 from stock_model.pool import add_to_pool, load_pool
@@ -99,6 +99,14 @@ class BacktestRunRequest(BaseModel):
     benchmark: str = '000300'
 
 
+class DataDownloadRequest(BaseModel):
+    scope: str = Field(default='pool', pattern='^(pool|top_amount)$')
+    top_n: int = Field(default=100, ge=1, le=5000)
+    mode: str = Field(default='incremental', pattern='^(incremental|full)$')
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
 def safe_float(val: Any, default: float = 0.0) -> float:
     if val is None or pd.isna(val):
         return default
@@ -128,6 +136,24 @@ def _load_universe_df() -> pd.DataFrame:
             pass
     return pd.DataFrame(columns=['symbol', 'name', 'initials', 'pinyin', 'search_label'])
 
+def _pool_symbols() -> List[str]:
+    if not POOL_PATH.exists():
+        return []
+    return load_pool(POOL_PATH)['symbol'].astype(str).str.zfill(6).drop_duplicates().tolist()
+
+
+def _load_pool_panel(symbols: List[str]) -> pd.DataFrame:
+    panel = load_panel(RAW_DATA_DIR)
+    return panel[panel['symbol'].astype(str).str.zfill(6).isin(symbols)].copy()
+
+
+def _parse_date(value: Optional[str], default: str) -> str:
+    if not value:
+        return default
+    try:
+        return pd.Timestamp(value).strftime('%Y%m%d')
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f'日期格式无效: {value}') from exc
 
 def load_latest_market_sentiment() -> Dict[str, Any]:
     path = ARCHIVE_DATA_DIR / 'market_sentiment.csv'
@@ -202,6 +228,16 @@ def get_system_status() -> Dict[str, Any]:
         },
     }
 
+@app.get('/api/research/linkage')
+def get_research_linkage() -> Dict[str, Any]:
+    manifest_path = OUTPUT_DIR / 'latest_score_manifest.json'
+    metrics_path = OUTPUT_DIR / 'backtest_metrics.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else {}
+    metrics = json.loads(metrics_path.read_text(encoding='utf-8')) if metrics_path.exists() else {}
+    score_config, backtest_config = manifest.get('config', {}), metrics.get('config', {})
+    score_data_end, backtest_data_end = manifest.get('data_end'), metrics.get('data_end')
+    config_matches = bool(score_config and backtest_config and score_config.get('horizon') == backtest_config.get('horizon') and score_config.get('top_k') == backtest_config.get('top_k'))
+    return {'score_run_id': manifest.get('run_id'), 'backtest_run_id': metrics.get('run_id'), 'score_data_fingerprint': manifest.get('data_fingerprint'), 'score_data_end': score_data_end, 'backtest_data_end': backtest_data_end, 'data_end_matches': bool(score_data_end and score_data_end == backtest_data_end), 'config_matches': config_matches, 'score_config': score_config, 'backtest_config': backtest_config, 'ready_for_decision': bool(manifest and metrics and config_matches and score_data_end == backtest_data_end)}
 
 @app.get('/api/pool')
 def get_stock_pool() -> List[Dict[str, Any]]:
@@ -335,67 +371,37 @@ def search_universe(
     return res
 
 
-def _background_download(task_id: str, symbols: List[str]) -> None:
+def _background_download(task_id: str, symbols: List[str], mode: str, start_date: str, end_date: str) -> None:
     def progress_cb(current: int, total: int, symbol: str, note: str) -> None:
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {
-                'running': True,
-                'current': current,
-                'total': total,
-                'percent': round(current / max(1, total) * 100, 1),
-                'symbol': symbol,
-                'message': f'[{current}/{total}] {symbol} - {note}',
-                'error': None,
-            }
+            _TASK_STATUS[task_id] = {'running': True, 'current': current, 'total': total, 'percent': round(current / max(1, total) * 100, 1), 'symbol': symbol, 'message': f'[{current}/{total}] {symbol} - {note}', 'error': None}
 
     try:
-        end_date = datetime.now().strftime('%Y%m%d')
-        update_histories(
-            symbols=symbols,
-            end=end_date,
-            output_dir=RAW_DATA_DIR,
-            progress=progress_cb,
-        )
+        if mode == 'full':
+            download_histories(symbols=symbols, start=start_date, end=end_date, output_dir=RAW_DATA_DIR, progress=progress_cb)
+        else:
+            update_histories(symbols=symbols, end=end_date, output_dir=RAW_DATA_DIR, full_start=start_date, progress=progress_cb)
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {
-                'running': False,
-                'current': len(symbols),
-                'total': len(symbols),
-                'percent': 100.0,
-                'symbol': '',
-                'message': f'更新完成，共处理 {len(symbols)} 只标的',
-                'error': None,
-            }
+            _TASK_STATUS[task_id] = {'running': False, 'current': len(symbols), 'total': len(symbols), 'percent': 100.0, 'symbol': '', 'message': f'更新完成，共处理 {len(symbols)} 只标的', 'error': None}
     except Exception as exc:
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {
-                'running': False,
-                'percent': 0.0,
-                'message': f'任务执行失败: {exc}',
-                'error': str(exc),
-            }
+            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'message': f'任务执行失败: {exc}', 'error': str(exc)}
 
 
 @app.post('/api/data/download')
-def start_data_download(background_tasks: BackgroundTasks) -> Dict[str, Any]:
-    symbols = get_symbols(POOL_PATH)
+def start_data_download(background_tasks: BackgroundTasks, payload: DataDownloadRequest = DataDownloadRequest()) -> Dict[str, Any]:
+    symbols = _pool_symbols() if payload.scope == 'pool' else get_symbols(None, payload.top_n)
     if not symbols:
-        raise HTTPException(status_code=400, detail='Stock pool is empty')
-
+        raise HTTPException(status_code=400, detail='未找到可下载的股票代码')
+    end_date = _parse_date(payload.end_date, datetime.now().strftime('%Y%m%d'))
+    start_date = _parse_date(payload.start_date, '20180101')
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail='起始日期不能晚于结束日期')
     task_id = f'dl_{int(time.time())}'
     with _TASK_LOCK:
-        _TASK_STATUS[task_id] = {
-            'running': True,
-            'current': 0,
-            'total': len(symbols),
-            'percent': 0.0,
-            'symbol': '',
-            'message': '任务初始化...',
-            'error': None,
-        }
-
-    background_tasks.add_task(_background_download, task_id, symbols)
-    return {'ok': True, 'task_id': task_id, 'symbols_count': len(symbols)}
+        _TASK_STATUS[task_id] = {'running': True, 'current': 0, 'total': len(symbols), 'percent': 0.0, 'symbol': '', 'message': '任务初始化...', 'error': None}
+    background_tasks.add_task(_background_download, task_id, symbols, payload.mode, start_date, end_date)
+    return {'ok': True, 'task_id': task_id, 'symbols_count': len(symbols), 'mode': payload.mode, 'scope': payload.scope}
 
 
 @app.get('/api/data/download-progress')
@@ -405,11 +411,26 @@ def get_download_progress(task_id: str = Query(...)) -> Dict[str, Any]:
     if not status:
         return {'running': False, 'percent': 100.0, 'message': '未找到任务或任务已结束', 'error': None}
     return status
+@app.get('/api/stock/{symbol}/history')
+def get_stock_history(symbol: str, days: int = Query(120, ge=5, le=1000)) -> Dict[str, Any]:
+    normalized_symbol = symbol.strip().zfill(6)
+    path = RAW_DATA_DIR / f'{normalized_symbol}.parquet'
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f'未找到 {normalized_symbol} 的本地行情数据')
+    try:
+        frame = pd.read_parquet(path).sort_values('date').tail(days)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f'读取行情失败: {exc}') from exc
+    if frame.empty:
+        raise HTTPException(status_code=404, detail=f'{normalized_symbol} 没有可用行情记录')
+    columns = ['date', 'open', 'high', 'low', 'close', 'volume', 'amount', 'turnover']
+    records = [{column: (pd.Timestamp(row[column]).strftime('%Y-%m-%d') if column == 'date' else safe_float(row.get(column))) for column in columns} for _, row in frame.iterrows()]
+    return {'symbol': normalized_symbol, 'days': len(records), 'history': records}
 
 
 @app.post('/api/data/sync-metadata')
 def sync_metadata() -> Dict[str, Any]:
-    symbols = get_symbols(POOL_PATH)
+    symbols = _pool_symbols()
     if not symbols:
         raise HTTPException(status_code=400, detail='Stock pool is empty')
     try:
@@ -425,10 +446,10 @@ def sync_metadata() -> Dict[str, Any]:
 
 @app.post('/api/data/repair-quality')
 def repair_data_quality() -> Dict[str, Any]:
-    symbols = get_symbols(POOL_PATH)
+    symbols = _pool_symbols()
     if not symbols:
         raise HTTPException(status_code=400, detail='股票池为空')
-    panel = load_panel(RAW_DATA_DIR, symbols)
+    panel = _load_pool_panel(symbols)
     if panel.empty:
         raise HTTPException(status_code=400, detail='未找到行情数据')
     quality_report, quality_summary = audit_market_data(panel)
@@ -439,7 +460,7 @@ def repair_data_quality() -> Dict[str, Any]:
     end_str = now.strftime('%Y%m%d')
     start_str = f'{now.year - 4}0101'
     try:
-        update_histories(RAW_DATA_DIR, repair_symbols, start=start_str, end=end_str)
+        download_histories(symbols=repair_symbols, start=start_str, end=end_str, output_dir=RAW_DATA_DIR)
         return {'ok': True, 'repaired': len(repair_symbols), 'symbols': repair_symbols, 'message': f'成功修复并重新下载 {len(repair_symbols)} 只股票'}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f'修复下载失败: {exc}')
@@ -535,11 +556,11 @@ def get_latest_scores() -> Dict[str, Any]:
 
 @app.post('/api/scores/run')
 def run_scoring(payload: ScoringRunRequest) -> Dict[str, Any]:
-    symbols = get_symbols(POOL_PATH)
+    symbols = _pool_symbols()
     if not symbols:
         raise HTTPException(status_code=400, detail='Stock pool is empty')
 
-    panel = load_panel(RAW_DATA_DIR, symbols)
+    panel = _load_pool_panel(symbols)
     if panel.empty:
         raise HTTPException(status_code=400, detail='No historical bars found in data/raw')
 
@@ -617,11 +638,11 @@ def get_latest_backtest() -> Dict[str, Any]:
 
 @app.post('/api/backtest/run')
 def run_backtest(payload: BacktestRunRequest) -> Dict[str, Any]:
-    symbols = get_symbols(POOL_PATH)
+    symbols = _pool_symbols()
     if not symbols:
         raise HTTPException(status_code=400, detail='Stock pool is empty')
 
-    panel = load_panel(RAW_DATA_DIR, symbols)
+    panel = _load_pool_panel(symbols)
     frame, features = build_features(panel, horizon=payload.horizon)
     weights_dict = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
 
