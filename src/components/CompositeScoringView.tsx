@@ -45,6 +45,7 @@ interface CompositeScoringViewProps {
   onSelectStock: (stock: ScoredStock) => void;
   onRunScoring: () => void;
   isScoringRunning?: boolean;
+  scoringProgress?: { running?: boolean; percent?: number; message?: string; error?: string | null; details?: any[] };
   onNavigateToData?: () => void;
 }
 
@@ -55,6 +56,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
   onSelectStock,
   onRunScoring,
   isScoringRunning = false,
+  scoringProgress,
   onNavigateToData,
 }) => {
   const [selectedStockSymbol, setSelectedStockSymbol] = useState<string>(stocks[0]?.symbol || '605277');
@@ -229,6 +231,27 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
         </div>
       </div>
 
+      {scoringProgress ? (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">评分测算明细</h3>
+              <p className={`text-xs mt-0.5 ${scoringProgress.error ? 'text-rose-600' : 'text-slate-500'}`}>
+                {scoringProgress.error || scoringProgress.message || '等待评分任务返回状态'}
+              </p>
+            </div>
+            <span className="text-xs font-mono text-indigo-700">{Math.round(scoringProgress.percent || 0)}%</span>
+          </div>
+          <div className="max-h-56 overflow-y-auto px-4 py-2">
+            {(scoringProgress.details || []).map((detail: any, index: number) => (
+              <div key={`${detail.stage || detail.symbol || 'step'}-${index}`} className="flex items-center justify-between py-1.5 text-xs border-b border-slate-50 last:border-0">
+                <span className="text-slate-700">{detail.stage || detail.symbol || '评分步骤'}</span>
+                <span className={detail.error ? 'text-rose-600' : 'text-slate-500'}>{detail.error || detail.status || detail.note || '--'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {/* Weight Controls & Presets Accordion / Card */}
       <div className="bg-white rounded-xl p-5 border border-slate-200 shadow-xs space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">

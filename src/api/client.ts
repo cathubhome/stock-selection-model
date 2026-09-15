@@ -8,6 +8,7 @@ export interface SystemStatusResponse {
   timestamp: string;
   pool_count: number;
   raw_bar_files: number;
+  market_data?: { latest_date: string | null; oldest_date: string | null; age_days: number | null; updated_symbols: number; stale_symbols: number };
   metadata_status: any;
   market_sentiment: any;
   latest_score_run: any;
@@ -26,6 +27,17 @@ export interface LatestBacktestResponse {
   periods: BacktestPeriod[];
 }
 
+export interface DownloadDetail {
+  symbol: string;
+  ok: boolean | null;
+  rows: number | null;
+  start: string;
+  end: string;
+  source: string;
+  error: string;
+  note: string;
+}
+
 export interface TaskProgressResponse {
   running: boolean;
   current?: number;
@@ -34,6 +46,7 @@ export interface TaskProgressResponse {
   symbol?: string;
   message: string;
   error?: string | null;
+  details?: any[];
 }
 
 export interface GovernanceCheckItem {
@@ -178,7 +191,7 @@ export async function runScoring(payload: {
   top_k?: number;
   weights?: WeightConfig;
   fetch_sentiment?: boolean;
-}): Promise<LatestScoresResponse | null> {
+}): Promise<any> {
   const res = await fetch(API_BASE + '/scores/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -188,6 +201,20 @@ export async function runScoring(payload: {
     const err = await res.json().catch(() => ({ detail: '评分计算失败' }));
     throw new Error(err.detail || '评分计算失败');
   }
+  return await res.json();
+}
+export async function fetchUniverseIndustry(symbol: string): Promise<{ symbol: string; name: string; industry: string; source: string } | null> {
+  try {
+    const res = await fetch(API_BASE + '/universe/' + encodeURIComponent(symbol) + '/industry');
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchScoringProgress(taskId: string): Promise<TaskProgressResponse> {
+  const res = await fetch(API_BASE + '/scores/run-progress?task_id=' + encodeURIComponent(taskId));
+  if (!res.ok) return { running: false, percent: 0, message: '无法获取评分进度', error: '进度接口不可用', details: [] };
   return await res.json();
 }
 

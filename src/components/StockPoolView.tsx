@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Search, 
   Plus, 
@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { ScoredStock } from '../types';
 import { REMOTE_METADATA_STATUS } from '../data/remoteArchiveData';
-import { startDataDownload, fetchDownloadProgress, searchUniverse, syncMetadata, batchAddPoolStocks, repairDataQuality, fetchLatestScores } from '../api/client';
+import { startDataDownload, fetchDownloadProgress, searchUniverse, fetchUniverseIndustry, syncMetadata, batchAddPoolStocks, repairDataQuality, fetchLatestScores, fetchSystemStatus, DownloadDetail } from '../api/client';
 import { FileText, Wrench } from 'lucide-react';
 
 interface StockPoolViewProps {
@@ -37,20 +37,33 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const [downloadDetails, setDownloadDetails] = useState<DownloadDetail[]>([]);
+  const [downloadMessage, setDownloadMessage] = useState('');
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newSymbol, setNewSymbol] = useState('');
   const [newName, setNewName] = useState('');
-  const [newIndustry, setNewIndustry] = useState('电子核心部件');
+  const [newIndustry, setNewIndustry] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [isSyncingMeta, setIsSyncingMeta] = useState(false);
   const [syncMetaSuccess, setSyncMetaSuccess] = useState(false);
-  const [suggestions, setSuggestions] = useState<Array<{ symbol: string; name: string; market: string }>>([]);
+  const [suggestions, setSuggestions] = useState<Array<{ symbol: string; name: string; market: string; industry?: string }>>([]);
   const [addMode, setAddMode] = useState<'single' | 'batch'>('single');
   const [batchText, setBatchText] = useState('');
   const [isBatchAdding, setIsBatchAdding] = useState(false);
   const [batchSuccessMsg, setBatchSuccessMsg] = useState<string | null>(null);
   const [isRepairingQuality, setIsRepairingQuality] = useState(false);
   const [repairQualityMsg, setRepairQualityMsg] = useState<string | null>(null);
+  const [marketData, setMarketData] = useState<any | null>(null);
+
+  const refreshMarketData = async () => {
+    const status = await fetchSystemStatus();
+    setMarketData(status?.market_data || null);
+  };
+
+  useEffect(() => {
+    refreshMarketData();
+  }, []);
 
   const handleRepairQuality = async () => {
     setIsRepairingQuality(true);
@@ -113,9 +126,10 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
     }
   };
 
-  const handleSelectSuggestion = (item: { symbol: string; name: string; market: string }) => {
+  const handleSelectSuggestion = (item: { symbol: string; name: string; market: string; industry?: string }) => {
     setNewSymbol(item.symbol);
     setNewName(item.name);
+    setNewIndustry(item.industry || '');
     setSuggestions([]);
   };
 
@@ -138,6 +152,9 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
     setIsDownloading(true);
     setDownloadProgress(5);
     setDownloadSuccess(false);
+    setDownloadDetails([]);
+    setDownloadMessage('任务初始化...');
+    setDownloadError(null);
 
     try {
       const res = await startDataDownload();
@@ -147,9 +164,14 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
           try {
             const prog = await fetchDownloadProgress(taskId);
             setDownloadProgress(Math.max(10, Math.min(100, Math.round(prog.percent))));
+            setDownloadDetails(prog.details || []);
+            setDownloadMessage(prog.message);
             if (!prog.running) {
               clearInterval(timer);
               setIsDownloading(false);
+              setDownloadMessage(prog.error || prog.message);
+              setDownloadError(prog.error || null);
+              await refreshMarketData();
               setDownloadSuccess(true);
               setTimeout(() => setDownloadSuccess(false), 4000);
             }
@@ -160,22 +182,11 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
         }, 1200);
         return;
       }
-    } catch {
-      // fallback simulation if backend is offline
+    } catch (error: any) {
+      setIsDownloading(false);
+      setDownloadError(error?.message || '下载任务启动失败');
+      setDownloadMessage(error?.message || '下载任务启动失败');
     }
-
-    const interval = setInterval(() => {
-      setDownloadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsDownloading(false);
-          setDownloadSuccess(true);
-          setTimeout(() => setDownloadSuccess(false), 4000);
-          return 100;
-        }
-        return prev + 18;
-      });
-    }, 250);
   };
 
   // Add new stock
@@ -275,9 +286,9 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
         <div className="flex flex-wrap items-center gap-2.5">
           <div className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
             <Clock className="w-3.5 h-3.5 text-slate-400" />
-            <span>最新行情: <strong className="font-mono text-slate-800">2026-09-04</strong></span>
+            <span>最新行情: <strong className="font-mono text-slate-800">{marketData?.latest_date || '--'}</strong></span>
             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-700 border border-amber-200">
-              距今 9 天待同步
+              {marketData?.age_days == null ? '正在读取时效' : `距今 ${marketData.age_days} 天待同步`}
             </span>
           </div>
 
@@ -340,6 +351,37 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
         </div>
       </div>
 
+      {(isDownloading || downloadDetails.length > 0 || downloadError) && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">行情更新明细</h3>
+              <p className="text-xs text-slate-500 mt-0.5">{downloadMessage || '等待下载任务返回状态'}</p>
+            </div>
+            <span className="text-xs font-mono text-indigo-700">{downloadProgress}% · {downloadDetails.length} 只已处理</span>
+          </div>
+          <div className="max-h-72 overflow-y-auto">
+            <table className="w-full text-left text-xs text-slate-700">
+              <thead className="sticky top-0 bg-slate-50 text-slate-500 text-[11px]">
+                <tr><th className="px-4 py-2">代码</th><th className="px-4 py-2">结果</th><th className="px-4 py-2">新增行数</th><th className="px-4 py-2">数据区间</th><th className="px-4 py-2">来源 / 说明</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {downloadDetails.map((detail) => (
+                  <tr key={detail.symbol}>
+                    <td className="px-4 py-2 font-mono font-semibold">{detail.symbol}</td>
+                    <td className={`px-4 py-2 font-medium ${detail.ok === false ? 'text-rose-600' : detail.ok === true ? 'text-emerald-700' : 'text-amber-700'}`}>
+                      {detail.ok === false ? '失败' : detail.ok === true ? '完成' : '处理中'}
+                    </td>
+                    <td className="px-4 py-2">{detail.rows ?? '--'}</td>
+                    <td className="px-4 py-2 font-mono text-[11px]">{detail.start && detail.end ? `${detail.start} ~ ${detail.end}` : '--'}</td>
+                    <td className="px-4 py-2">{detail.error || [detail.source, detail.note].filter(Boolean).join(' · ') || '--'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {/* Data Quality Diagnosis Banner */}
       <div className="bg-slate-50 rounded-xl border border-slate-200/80 p-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
@@ -347,7 +389,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
             <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">数据质量体检诊断 (Data Quality Audit)</h4>
           </div>
-          <span className="text-[11px] text-slate-500">更新时间: 2026-09-05 20:46 · 架构版本 2</span>
+          <span className="text-[11px] text-slate-500">最新数据: {marketData?.latest_date || '--'} · 未同步标的 {marketData?.stale_symbols ?? '--'} 只</span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
@@ -376,9 +418,9 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
           <div className="bg-white p-3 rounded-lg border border-amber-200 bg-amber-50/40">
             <span className="text-amber-800 block text-[11px] font-medium">数据时效状态</span>
             <div className="font-bold text-amber-950 mt-1">
-              滞后 9 天
+              {marketData?.age_days == null ? '状态读取中' : `滞后 ${marketData.age_days} 天`}
             </div>
-            <span className="text-[10px] text-amber-700">最新行情: 2026-09-04</span>
+            <span className="text-[10px] text-amber-700">最新行情: {marketData?.latest_date || '--'}</span>
           </div>
         </div>
       </div>
@@ -616,7 +658,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                             <span className="font-mono font-bold text-slate-900 mr-2">{s.symbol}</span>
                             <span className="text-slate-700">{s.name}</span>
                           </div>
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{s.market}</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">{s.industry || s.market}</span>
                         </div>
                       ))}
                     </div>

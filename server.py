@@ -155,6 +155,33 @@ def _parse_date(value: Optional[str], default: str) -> str:
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f'日期格式无效: {value}') from exc
 
+def _search_pinyin(universe_row: Dict[str, Any]) -> str:
+    full_pinyin = str(universe_row.get('pinyin') or '').strip()
+    initials = str(universe_row.get('initials') or '').strip()
+    return ' '.join(value for value in (full_pinyin, initials) if value)
+
+def _market_data_freshness() -> Dict[str, Any]:
+    latest_dates: List[pd.Timestamp] = []
+    for path in RAW_DATA_DIR.glob('*.parquet'):
+        try:
+            dates = pd.read_parquet(path, columns=['date'])['date']
+            latest_date = pd.to_datetime(dates, errors='coerce').max()
+            if pd.notna(latest_date):
+                latest_dates.append(pd.Timestamp(latest_date).normalize())
+        except Exception:
+            continue
+    if not latest_dates:
+        return {'latest_date': None, 'oldest_date': None, 'age_days': None, 'updated_symbols': 0, 'stale_symbols': 0}
+    newest = max(latest_dates)
+    oldest = min(latest_dates)
+    return {
+        'latest_date': newest.strftime('%Y-%m-%d'),
+        'oldest_date': oldest.strftime('%Y-%m-%d'),
+        'age_days': max(0, (pd.Timestamp.now().normalize() - newest).days),
+        'updated_symbols': len(latest_dates),
+        'stale_symbols': sum(date < newest for date in latest_dates),
+    }
+
 def load_latest_market_sentiment() -> Dict[str, Any]:
     path = ARCHIVE_DATA_DIR / 'market_sentiment.csv'
     if not path.exists():
@@ -203,6 +230,7 @@ def get_system_status() -> Dict[str, Any]:
             pass
 
     raw_count = len(list(RAW_DATA_DIR.glob('*.parquet'))) if RAW_DATA_DIR.exists() else 0
+    market_data = _market_data_freshness()
 
     latest_manifest = {}
     manifest_file = OUTPUT_DIR / 'latest_score_manifest.json'
@@ -218,6 +246,7 @@ def get_system_status() -> Dict[str, Any]:
         'timestamp': datetime.now().isoformat(),
         'pool_count': pool_count,
         'raw_bar_files': raw_count,
+        'market_data': market_data,
         'metadata_status': meta_status,
         'market_sentiment': sentiment,
         'latest_score_run': {
@@ -279,7 +308,7 @@ def get_stock_pool() -> List[Dict[str, Any]]:
         result.append({
             'symbol': sym,
             'name': str(row.get('name') or u_info.get('name') or sym),
-            'pinyin': str(u_info.get('pinyin', '')),
+            'pinyin': _search_pinyin(u_info),
             'industry': industry if industry and industry != 'nan' else '综合',
             'market': _determine_market(sym),
             'source': str(row.get('source', '本地股票池')),
@@ -359,6 +388,8 @@ def search_universe(
         | universe['initials'].str.lower().str.contains(keyword, na=False)
     )
     matched = universe[mask].head(limit)
+    metadata = latest_metadata_snapshot(load_metadata_history(ARCHIVE_DATA_DIR), matched['symbol'].astype(str).tolist())
+    industry_map = metadata.set_index('symbol')['industry'].fillna('').to_dict() if not metadata.empty else {}
     res = []
     for _, r in matched.iterrows():
         sym = str(r['symbol']).zfill(6)
@@ -366,26 +397,49 @@ def search_universe(
             'symbol': sym,
             'name': str(r['name']),
             'pinyin': str(r.get('pinyin', '')),
+            'industry': str(industry_map.get(sym) or ''),
             'market': _determine_market(sym),
         })
     return res
 
+@app.get('/api/universe/{symbol}/industry')
+def lookup_universe_industry(symbol: str) -> Dict[str, Any]:
+    normalized_symbol = symbol.strip().zfill(6)
+    universe = _load_universe_df()
+    match = universe[universe['symbol'].astype(str).str.zfill(6) == normalized_symbol] if not universe.empty else pd.DataFrame()
+    name = str(match.iloc[0].get('name') or normalized_symbol) if not match.empty else normalized_symbol
+    history = latest_metadata_snapshot(load_metadata_history(ARCHIVE_DATA_DIR), [normalized_symbol])
+    if not history.empty and str(history.iloc[0].get('industry') or '').strip():
+        return {'symbol': normalized_symbol, 'name': name, 'industry': str(history.iloc[0]['industry']), 'source': str(history.iloc[0].get('source') or '本地元数据'), 'cached': True}
+    try:
+        snapshot, report = fetch_current_metadata([normalized_symbol])
+        if not snapshot.empty:
+            row = snapshot.iloc[0]
+            industry = str(row.get('industry') or '').strip()
+            if industry:
+                return {'symbol': normalized_symbol, 'name': name, 'industry': industry, 'source': str(row.get('source') or '实时元数据'), 'cached': False}
+    except Exception:
+        pass
+    return {'symbol': normalized_symbol, 'name': name, 'industry': '', 'source': '暂无可用申万行业数据', 'cached': False}
 
 def _background_download(task_id: str, symbols: List[str], mode: str, start_date: str, end_date: str) -> None:
     def progress_cb(current: int, total: int, symbol: str, note: str) -> None:
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': True, 'current': current, 'total': total, 'percent': round(current / max(1, total) * 100, 1), 'symbol': symbol, 'message': f'[{current}/{total}] {symbol} - {note}', 'error': None}
+            status = _TASK_STATUS.get(task_id, {})
+            details = [item for item in status.get('details', []) if item.get('symbol') != symbol]
+            details.append({'symbol': symbol, 'ok': None, 'rows': None, 'start': '', 'end': '', 'source': '', 'error': '', 'note': note})
+            _TASK_STATUS[task_id] = {'running': True, 'current': current, 'total': total, 'percent': round(current / max(1, total) * 100, 1), 'symbol': symbol, 'message': f'[{current}/{total}] {symbol} - {note}', 'error': None, 'details': details}
 
     try:
         if mode == 'full':
-            download_histories(symbols=symbols, start=start_date, end=end_date, output_dir=RAW_DATA_DIR, progress=progress_cb)
+            report = download_histories(symbols=symbols, start=start_date, end=end_date, output_dir=RAW_DATA_DIR, progress=progress_cb)
         else:
-            update_histories(symbols=symbols, end=end_date, output_dir=RAW_DATA_DIR, full_start=start_date, progress=progress_cb)
+            report = update_histories(symbols=symbols, end=end_date, output_dir=RAW_DATA_DIR, full_start=start_date, progress=progress_cb)
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'current': len(symbols), 'total': len(symbols), 'percent': 100.0, 'symbol': '', 'message': f'更新完成，共处理 {len(symbols)} 只标的', 'error': None}
+            _TASK_STATUS[task_id] = {'running': False, 'current': len(symbols), 'total': len(symbols), 'percent': 100.0, 'symbol': '', 'message': f'更新完成，共处理 {len(symbols)} 只标的', 'error': None, 'details': report}
     except Exception as exc:
         with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'message': f'任务执行失败: {exc}', 'error': str(exc)}
+            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'message': f'任务执行失败: {exc}', 'error': str(exc), 'details': _TASK_STATUS.get(task_id, {}).get('details', [])}
 
 
 @app.post('/api/data/download')
@@ -399,7 +453,7 @@ def start_data_download(background_tasks: BackgroundTasks, payload: DataDownload
         raise HTTPException(status_code=422, detail='起始日期不能晚于结束日期')
     task_id = f'dl_{int(time.time())}'
     with _TASK_LOCK:
-        _TASK_STATUS[task_id] = {'running': True, 'current': 0, 'total': len(symbols), 'percent': 0.0, 'symbol': '', 'message': '任务初始化...', 'error': None}
+        _TASK_STATUS[task_id] = {'running': True, 'current': 0, 'total': len(symbols), 'percent': 0.0, 'symbol': '', 'message': '任务初始化...', 'error': None, 'details': []}
     background_tasks.add_task(_background_download, task_id, symbols, payload.mode, start_date, end_date)
     return {'ok': True, 'task_id': task_id, 'symbols_count': len(symbols), 'mode': payload.mode, 'scope': payload.scope}
 
@@ -504,7 +558,7 @@ def get_latest_scores() -> Dict[str, Any]:
         stocks.append({
             'symbol': sym,
             'name': str(row.get('name') or u_info.get('name') or sym),
-            'pinyin': str(u_info.get('pinyin', '')),
+            'pinyin': _search_pinyin(u_info),
             'industry': str(row.get('industry') or '综合'),
             'market': _determine_market(sym),
             'price': price,
@@ -554,31 +608,60 @@ def get_latest_scores() -> Dict[str, Any]:
     }
 
 
+def _background_scoring(task_id: str, payload: ScoringRunRequest) -> None:
+    def stage(message: str) -> None:
+        with _TASK_LOCK:
+            status = _TASK_STATUS.get(task_id, {})
+            details = list(status.get('details', []))
+            details.append({'stage': message, 'status': '进行中'})
+            _TASK_STATUS[task_id] = {'running': True, 'percent': min(95.0, 10.0 + len(details) * 12.0), 'message': message, 'error': None, 'details': details}
+
+    def sentiment_progress(current: int, total: int, symbol: str) -> None:
+        with _TASK_LOCK:
+            status = _TASK_STATUS.get(task_id, {})
+            details = list(status.get('details', []))
+            details.append({'stage': '舆情抓取', 'symbol': symbol, 'status': f'{current}/{total}'})
+            _TASK_STATUS[task_id] = {'running': True, 'percent': min(90.0, 45.0 + current / max(1, total) * 35.0), 'message': f'舆情抓取 [{current}/{total}] {symbol}', 'error': None, 'details': details}
+
+    try:
+        stage('阶段 1/4：加载股票池与行情数据')
+        symbols = _pool_symbols()
+        if not symbols:
+            raise ValueError('股票池为空')
+        panel = _load_pool_panel(symbols)
+        if panel.empty:
+            raise ValueError('未找到股票池对应的行情数据')
+        stage('阶段 2/4：构建技术与量价特征')
+        frame, features = build_features(panel, horizon=payload.horizon)
+        stage('阶段 3/4：滚动前向训练与舆情抓取')
+        weights_dict = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
+        run_latest_research(frame=frame, features=features, top_k=payload.top_k, horizon=payload.horizon, output_dir=OUTPUT_DIR, weights=weights_dict, fetch_sentiment=payload.fetch_sentiment, progress=stage, sentiment_progress=sentiment_progress)
+        stage('阶段 4/4：综合评分与结果输出')
+        with _TASK_LOCK:
+            _TASK_STATUS[task_id] = {'running': False, 'percent': 100.0, 'message': '评分完成，结果已写入研究记录', 'error': None, 'details': _TASK_STATUS.get(task_id, {}).get('details', [])}
+    except Exception as exc:
+        with _TASK_LOCK:
+            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'message': f'评分失败: {exc}', 'error': str(exc), 'details': _TASK_STATUS.get(task_id, {}).get('details', [])}
+
+
 @app.post('/api/scores/run')
-def run_scoring(payload: ScoringRunRequest) -> Dict[str, Any]:
-    symbols = _pool_symbols()
-    if not symbols:
+def run_scoring(payload: ScoringRunRequest, background_tasks: BackgroundTasks) -> Dict[str, Any]:
+    if not _pool_symbols():
         raise HTTPException(status_code=400, detail='Stock pool is empty')
+    task_id = f'score_{int(time.time())}'
+    with _TASK_LOCK:
+        _TASK_STATUS[task_id] = {'running': True, 'percent': 0.0, 'message': '评分任务初始化...', 'error': None, 'details': []}
+    background_tasks.add_task(_background_scoring, task_id, payload)
+    return {'ok': True, 'task_id': task_id, 'message': '评分任务已启动'}
 
-    panel = _load_pool_panel(symbols)
-    if panel.empty:
-        raise HTTPException(status_code=400, detail='No historical bars found in data/raw')
 
-    frame, features = build_features(panel, horizon=payload.horizon)
-    weights_dict = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
-
-    picks, metrics, importance = run_latest_research(
-        frame=frame,
-        features=features,
-        top_k=payload.top_k,
-        horizon=payload.horizon,
-        output_dir=OUTPUT_DIR,
-        weights=weights_dict,
-        fetch_sentiment=payload.fetch_sentiment,
-    )
-
-    return get_latest_scores()
-
+@app.get('/api/scores/run-progress')
+def get_scoring_progress(task_id: str = Query(...)) -> Dict[str, Any]:
+    with _TASK_LOCK:
+        status = _TASK_STATUS.get(task_id)
+    if not status:
+        return {'running': False, 'percent': 100.0, 'message': '未找到任务或任务已结束', 'error': None, 'details': []}
+    return status
 
 @app.get('/api/backtest/latest')
 def get_latest_backtest() -> Dict[str, Any]:

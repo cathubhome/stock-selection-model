@@ -8,7 +8,7 @@ import { ResearchRunsView } from './components/ResearchRunsView';
 import { ResearchStep, ScoredStock, WeightConfig, ArchiveRun } from './types';
 import { RAW_REMOTE_STOCKS, ARCHIVE_RESEARCH_RUNS } from './data/remoteArchiveData';
 import { DEFAULT_WEIGHTS } from './utils/scoring';
-import { fetchSystemStatus, fetchStockPool, addPoolStocks, removePoolStock, fetchLatestScores, runScoring, fetchResearchRuns } from './api/client';
+import { fetchSystemStatus, fetchStockPool, addPoolStocks, removePoolStock, fetchLatestScores, runScoring, fetchScoringProgress, fetchResearchRuns } from './api/client';
 
 const LOCAL_STORAGE_KEY_POOL = 'a_share_stock_model_pool_v2';
 const LOCAL_STORAGE_KEY_WEIGHTS = 'a_share_stock_model_weights_v2';
@@ -63,6 +63,7 @@ export const App: React.FC = () => {
   // Research runs list
   const [researchRuns, setResearchRuns] = useState<ArchiveRun[]>(ARCHIVE_RESEARCH_RUNS);
   const [isScoringRunning, setIsScoringRunning] = useState(false);
+  const [scoringProgress, setScoringProgress] = useState<any | null>(null);
   const [isBackendOnline, setIsBackendOnline] = useState(false);
 
   // Check backend and sync live data if available
@@ -148,12 +149,24 @@ export const App: React.FC = () => {
     setIsScoringRunning(true);
     if (isBackendOnline) {
       try {
-        await runScoring({
+        setScoringProgress({ running: true, percent: 0, message: '评分任务初始化...', details: [] });
+        const task = await runScoring({
           horizon: 20,
           top_k: 10,
           weights,
           fetch_sentiment: true,
         });
+        if (task?.task_id) {
+          while (true) {
+            const progress = await fetchScoringProgress(task.task_id);
+            setScoringProgress(progress);
+            if (!progress.running) {
+              if (progress.error) throw new Error(progress.error);
+              break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1200));
+          }
+        }
         const scoresRes = await fetchLatestScores();
         if (scoresRes && scoresRes.stocks && scoresRes.stocks.length > 0) {
           setStocks(scoresRes.stocks);
@@ -232,6 +245,7 @@ export const App: React.FC = () => {
             onSelectStock={() => {}}
             onRunScoring={handleRunScoring}
             isScoringRunning={isScoringRunning}
+            scoringProgress={scoringProgress}
             onNavigateToData={() => setCurrentStep('股票池与数据')}
           />
         )}
