@@ -2,22 +2,27 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { 
   Search, 
   Plus, 
-  Download, 
   Trash2, 
   CheckCircle2, 
   AlertTriangle, 
-  FileSpreadsheet, 
-  RefreshCw,
-  Filter,
-  Check,
-  ExternalLink,
-  ShieldAlert,
-  Clock
+  RefreshCw, 
+  Filter, 
+  Check, 
+  ExternalLink, 
+  ShieldAlert, 
+  Clock,
+  CloudDownload,
+  ShieldCheck,
+  Layers,
+  ChevronDown,
+  X,
+  Database,
+  FileDown,
+  HelpCircle
 } from 'lucide-react';
 import { ScoredStock } from '../types';
 import { REMOTE_METADATA_STATUS } from '../data/remoteArchiveData';
 import { startDataDownload, fetchDownloadProgress, searchUniverse, fetchUniverseIndustry, syncMetadata, batchAddPoolStocks, repairDataQuality, fetchLatestScores, fetchSystemStatus, DownloadDetail } from '../api/client';
-import { FileText, Wrench } from 'lucide-react';
 
 interface StockPoolViewProps {
   stocks: ScoredStock[];
@@ -27,12 +32,15 @@ interface StockPoolViewProps {
   onRefreshPool?: () => Promise<void>;
 }
 
-const SW_L1_OPTIONS = [
-  '机械设备', '电子', '电力设备', '计算机', '医药生物', '基础化工', '汽车', '通信',
-  '有色金属', '国防军工', '食品饮料', '家用电器', '农林牧渔', '钢铁', '煤炭', '石油石化',
-  '建筑装饰', '建筑材料', '公用事业', '交通运输', '银行', '非银金融', '房地产', '商贸零售',
-  '社会服务', '轻工制造', '纺织服饰', '传媒', '环保', '美容护理', '综合'
+const SW_L1_CATEGORIES: Array<{ category: string; items: string[] }> = [
+  { category: '制造与设备', items: ['机械设备', '电力设备', '国防军工', '汽车'] },
+  { category: '科技与信息', items: ['电子', '计算机', '通信', '传媒'] },
+  { category: '医药与消费', items: ['医药生物', '食品饮料', '家用电器', '农林牧渔', '商贸零售', '社会服务', '轻工制造', '纺织服饰', '美容护理'] },
+  { category: '周期与能源', items: ['基础化工', '钢铁', '有色金属', '煤炭', '石油石化', '建筑材料', '建筑装饰', '公用事业', '环保'] },
+  { category: '金融与综合', items: ['银行', '非银金融', '房地产', '交通运输', '综合'] },
 ];
+
+const ALL_SW_L1_FLAT = SW_L1_CATEGORIES.flatMap(c => c.items);
 
 export const StockPoolView: React.FC<StockPoolViewProps> = ({
   stocks,
@@ -54,6 +62,9 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   const [newName, setNewName] = useState('');
   const [newIndustry, setNewIndustry] = useState('');
   const [isFetchingIndustry, setIsFetchingIndustry] = useState(false);
+  const [industryDropdownOpen, setIndustryDropdownOpen] = useState(false);
+  const [industryFilterText, setIndustryFilterText] = useState('');
+  const industryDropdownRef = useRef<HTMLDivElement>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [isSyncingMeta, setIsSyncingMeta] = useState(false);
   const [syncMetaSuccess, setSyncMetaSuccess] = useState(false);
@@ -76,6 +87,16 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
 
   useEffect(() => {
     refreshMarketData();
+  }, []);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (industryDropdownRef.current && !industryDropdownRef.current.contains(e.target as Node)) {
+        setIndustryDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
   useEffect(() => {
@@ -340,79 +361,86 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Controls Bar */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">股票池与数据资产管理</h2>
-          <p className="text-xs text-slate-500 mt-1">
-            维护本地关注池标的（共 {stocks.length} 只），支持代码/拼音检索、数据下载更新与数据质量体检
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
-            <Clock className="w-3.5 h-3.5 text-slate-400" />
-            <span>最新行情: <strong className="font-mono text-slate-800">{marketData?.latest_date || '--'}</strong></span>
-            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${marketData?.age_days === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center space-x-2 text-indigo-600 text-xs font-bold uppercase tracking-wider">
+            <Database className="w-3.5 h-3.5" />
+            <span>股票池与数据资产中心</span>
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">股票标的池管理与行情同步</h2>
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-xs text-slate-600">
+              <Clock className="w-3 h-3 text-slate-400" />
+              <span>最新行情: <strong className="font-mono text-slate-800">{marketData?.latest_date || '--'}</strong></span>
+            </div>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium border ${marketData?.age_days === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
               {marketData?.age_days == null ? '正在读取时效' : marketData.age_days === 0 ? '已同步至最近收盘' : `待同步 ${marketData.age_days} 个交易日`}
             </span>
+            <span className="text-slate-300 hidden sm:inline">·</span>
+            <span className="text-xs text-slate-500 hidden sm:inline">
+              有效关注标的 <strong className="font-mono text-slate-700 font-semibold">{stocks.length}</strong> 只
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+          {/* Primary Action Group */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-colors cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+              添加新标的
+            </button>
+
+            <button
+              onClick={handleDownloadAll}
+              disabled={isDownloading}
+              className={`inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-semibold shadow-xs transition-all cursor-pointer ${
+                isDownloading 
+                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
+                  : downloadSuccess
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-900 hover:bg-slate-800 text-white'
+              }`}
+            >
+              <CloudDownload className={`w-3.5 h-3.5 mr-1.5 ${isDownloading ? 'animate-bounce' : ''}`} />
+              {isDownloading ? `更新中 (${downloadProgress}%)` : downloadSuccess ? '行情已更新' : '更新行情数据'}
+            </button>
           </div>
 
-          <button
-            onClick={handleRepairQuality}
-            disabled={isRepairingQuality}
-            className="inline-flex items-center px-3 py-2 rounded-lg text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300 transition-colors shadow-xs cursor-pointer"
-            title="扫描行情缺失/停牌滞后并自动补全修复"
-          >
-            <Wrench className={`w-3.5 h-3.5 mr-1.5 ${isRepairingQuality ? 'animate-spin' : 'text-amber-600'}`} />
-            <span>{isRepairingQuality ? '正在体检修复...' : repairQualityMsg || '一键数据质量体检修复'}</span>
-          </button>
+          {/* Governance & Utility Group */}
+          <div className="flex items-center gap-1.5 border-t sm:border-t-0 sm:border-l border-slate-200 pt-2 sm:pt-0 sm:pl-2.5">
+            <button
+              onClick={handleRepairQuality}
+              disabled={isRepairingQuality}
+              className="inline-flex items-center px-2.5 py-2 rounded-lg text-xs font-medium bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 transition-colors shadow-xs cursor-pointer"
+              title="体检并诊断停牌缺失"
+            >
+              <ShieldCheck className={`w-3.5 h-3.5 mr-1 text-slate-500 ${isRepairingQuality ? 'animate-spin' : ''}`} />
+              <span>{isRepairingQuality ? '体检中...' : '数据体检'}</span>
+            </button>
 
-          <button
-            onClick={handleSyncMeta}
-            disabled={isSyncingMeta}
-            className={`inline-flex items-center px-3 py-2 rounded-lg text-xs font-semibold shadow-xs transition-all cursor-pointer ${
-              isSyncingMeta 
-                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                : syncMetaSuccess
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-white hover:bg-slate-50 text-slate-700 border border-slate-300'
-            }`}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isSyncingMeta ? 'animate-spin' : ''}`} />
-            {isSyncingMeta ? '同步元数据中...' : syncMetaSuccess ? '元数据已对齐' : '同步行业与元数据'}
-          </button>
+            <button
+              onClick={handleSyncMeta}
+              disabled={isSyncingMeta}
+              className="inline-flex items-center px-2.5 py-2 rounded-lg text-xs font-medium bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 transition-colors shadow-xs cursor-pointer"
+              title="同步并对齐申万行业与市值元数据"
+            >
+              <Layers className={`w-3.5 h-3.5 mr-1 text-slate-500 ${isSyncingMeta ? 'animate-spin' : ''}`} />
+              <span>{isSyncingMeta ? '同步中...' : syncMetaSuccess ? '已对齐' : '同步元数据'}</span>
+            </button>
 
-          <button
-            onClick={handleDownloadAll}
-            disabled={isDownloading}
-            className={`inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-semibold shadow-xs transition-all cursor-pointer ${
-              isDownloading 
-                ? 'bg-slate-100 text-slate-400 cursor-not-allowed' 
-                : downloadSuccess
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-            }`}
-          >
-            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${isDownloading ? 'animate-spin' : ''}`} />
-            {isDownloading ? `正在下载数据 (${downloadProgress}%)` : downloadSuccess ? '下载更新完成' : '全量增量更新行情'}
-          </button>
-
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center px-3.5 py-2 rounded-lg text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 transition-colors shadow-xs"
-          >
-            <Plus className="w-3.5 h-3.5 mr-1 text-slate-500" />
-            添加新标的
-          </button>
-
-          <button
-            onClick={handleExportCSV}
-            className="inline-flex items-center px-3 py-2 rounded-lg text-xs font-medium bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 transition-colors"
-            title="导出为标准 CSV"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-slate-500" />
-            导出股票池
-          </button>
+            <button
+              onClick={handleExportCSV}
+              className="inline-flex items-center px-2.5 py-2 rounded-lg text-xs font-medium bg-white hover:bg-slate-50 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
+              title="导出为标准 CSV 表格"
+            >
+              <FileDown className="w-3.5 h-3.5 mr-1 text-slate-500" />
+              导出
+            </button>
+          </div>
         </div>
       </div>
 
@@ -776,25 +804,113 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                     申万一级行业
                   </label>
                   {isFetchingIndustry && (
-                    <span className="text-[11px] text-indigo-600 animate-pulse">自动匹配申万一级行业中...</span>
+                    <span className="text-[11px] text-indigo-600 font-medium animate-pulse">系统自动匹配识别中...</span>
                   )}
                 </div>
-                <input
-                  type="text"
-                  list="sw-l1-options"
-                  placeholder="自动带出，或从申万一级行业下拉选择"
-                  value={newIndustry}
-                  onChange={(e) => setNewIndustry(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
-                />
-                <datalist id="sw-l1-options">
-                  {SW_L1_OPTIONS.map(opt => (
-                    <option key={opt} value={opt} />
-                  ))}
-                </datalist>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  已支持根据代码自动带出。用户亦可在申万宏源研究、新浪财经或东财/同花顺 F10 查看“所属申万行业”。
-                </p>
+                <div ref={industryDropdownRef} className="relative">
+                  <div className="flex items-center rounded-lg border border-slate-300 bg-white focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500">
+                    <input
+                      type="text"
+                      value={newIndustry}
+                      placeholder="输入文字检索，或点击右侧展开选择"
+                      onChange={(e) => {
+                        setNewIndustry(e.target.value);
+                        setIndustryFilterText(e.target.value);
+                        setIndustryDropdownOpen(true);
+                      }}
+                      onFocus={() => setIndustryDropdownOpen(true)}
+                      className="w-full px-3 py-2 text-xs outline-hidden bg-transparent"
+                    />
+                    {newIndustry && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewIndustry('');
+                          setIndustryFilterText('');
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600"
+                        title="清空行业"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setIndustryDropdownOpen(prev => !prev)}
+                      className="p-2 text-slate-400 hover:text-slate-600 border-l border-slate-100 cursor-pointer"
+                      title="展开申万一级行业列表"
+                    >
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${industryDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+
+                  {industryDropdownOpen && (
+                    <div className="absolute z-50 left-0 right-0 mt-1 max-h-64 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl animate-in fade-in zoom-in-95 duration-100 text-xs">
+                      {industryFilterText.trim() ? (
+                        <div className="space-y-1">
+                          <div className="text-[11px] font-semibold text-slate-400 px-1.5 py-0.5">匹配结果</div>
+                          {ALL_SW_L1_FLAT.filter(item => item.includes(industryFilterText.trim())).length === 0 ? (
+                            <div className="px-2 py-3 text-center text-slate-400 text-xs">
+                              未找到匹配的申万行业，可直接按回车使用当前输入
+                            </div>
+                          ) : (
+                            ALL_SW_L1_FLAT
+                              .filter(item => item.includes(industryFilterText.trim()))
+                              .map(item => (
+                                <div
+                                  key={item}
+                                  onClick={() => {
+                                    setNewIndustry(item);
+                                    setIndustryFilterText('');
+                                    setIndustryDropdownOpen(false);
+                                  }}
+                                  className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                                    newIndustry === item ? 'bg-indigo-50 font-bold text-indigo-700' : 'hover:bg-slate-100 text-slate-700'
+                                  }`}
+                                >
+                                  <span>{item}</span>
+                                  {newIndustry === item && <Check className="w-3.5 h-3.5 text-indigo-600" />}
+                                </div>
+                              ))
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {SW_L1_CATEGORIES.map(group => (
+                            <div key={group.category}>
+                              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1 mb-1">
+                                {group.category}
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                {group.items.map(item => (
+                                  <div
+                                    key={item}
+                                    onClick={() => {
+                                      setNewIndustry(item);
+                                      setIndustryDropdownOpen(false);
+                                    }}
+                                    className={`flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer text-xs transition-colors ${
+                                      newIndustry === item
+                                        ? 'bg-indigo-50 font-bold text-indigo-700 border border-indigo-200'
+                                        : 'hover:bg-slate-100 text-slate-700 border border-transparent'
+                                    }`}
+                                  >
+                                    <span>{item}</span>
+                                    {newIndustry === item && <Check className="w-3 h-3 text-indigo-600 shrink-0" />}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center space-x-1.5 mt-1.5 text-[11px] text-slate-400">
+                  <HelpCircle className="w-3 h-3 text-slate-400 shrink-0" />
+                  <span>支持输入模糊检索或点选；亦可参考申万研究、新浪财经或东财F10核对</span>
+                </div>
               </div>
 
               <div className="flex items-center justify-end space-x-2 pt-2">

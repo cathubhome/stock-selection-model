@@ -22,7 +22,9 @@ import {
   ChevronRight,
   FileSpreadsheet,
   FileText,
-  Play,
+  Sparkles,
+  FileDown,
+  ChevronDown,
   CheckCircle2,
   Info,
   Calendar,
@@ -59,6 +61,8 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
   const [scoringContext, setScoringContext] = useState<ScoringContextResponse | null>(null);
   const [scoringConfig, setScoringConfig] = useState<ScoringConfig>({ horizon: 20, top_k: 10, fetch_sentiment: true });
+  const [exportMenuOpen, setExportMenuOpen] = useState<boolean>(false);
+  const exportMenuRef = React.useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -76,6 +80,16 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
       window.clearInterval(timer);
     };
   }, [scoringProgress?.running]);
+
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, []);
 
   const latestMarketDate = systemStatus?.market_data?.latest_date || '--';
   const latestDataDate = scoringContext?.manifest?.data_end || stocks[0]?.date || '--';
@@ -191,77 +205,109 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Banner */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2 text-indigo-600 text-xs font-bold uppercase tracking-wider mb-1">
+      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center space-x-2 text-indigo-600 text-xs font-bold uppercase tracking-wider">
             <Sliders className="w-4 h-4" />
             <span>第三步 · 综合多因子评分与候选研判</span>
           </div>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">
             五维因子权重动态配置与透明归因
           </h2>
-          <p className="text-xs text-slate-500 mt-0.5">
-            模型(35%) + 技术(25%) + 量价(20%) + K线(10%) + 舆情(10%)，实时归一化计算，自动更新截面排位
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Micro Data Provenance Badge */}
-          <div className={`inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-xs ${scoreUsesLatestMarket ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
-            <Calendar className="w-3.5 h-3.5 text-slate-400" />
-            <span>评分截面: <strong className="font-mono">{latestDataDate}</strong></span>
-            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${scoreUsesLatestMarket ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-800 border-amber-200'}`}>
-              {scoreUsesLatestMarket ? '评分已基于最新行情' : `行情 ${latestMarketDate}，评分待重算`}
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-md bg-slate-50 border border-slate-200 text-xs text-slate-600">
+              <Calendar className="w-3 h-3 text-slate-400" />
+              <span>评分截面基准: <strong className="font-mono text-slate-800">{latestDataDate}</strong></span>
+            </div>
+            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-medium border ${scoreUsesLatestMarket ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+              {scoreUsesLatestMarket ? '基于最新行情截面 (已对齐)' : `行情已至 ${latestMarketDate}，评分待重算`}
             </span>
-            {onNavigateToData && (
+            {onNavigateToData && !scoreUsesLatestMarket && (
               <button
                 onClick={onNavigateToData}
-                className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium hover:underline ml-0.5 cursor-pointer"
+                className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium hover:underline cursor-pointer"
                 title="前往股票池与数据中心进行增量更新"
               >
-                去更新 ↗
+                前往更新行情 ↗
               </button>
             )}
           </div>
+        </div>
 
+        <div className="flex items-center gap-2.5">
           <button
             onClick={() => onRunScoring(scoringConfig)}
             disabled={isScoringRunning || !weightsValid}
-            className={`inline-flex items-center px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition-all ${
+            className={`inline-flex items-center px-4 py-2 rounded-lg text-xs font-bold shadow-xs transition-all ${
               isScoringRunning || !weightsValid
                 ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
                 : 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
             }`}
           >
-            <Play className={`w-3.5 h-3.5 mr-1.5 fill-current ${isScoringRunning ? 'animate-pulse' : ''}`} />
-            {isScoringRunning ? '正在重新测算评分...' : !weightsValid ? '权重合计需为 100%' : '重新运行评分快照'}
+            <Sparkles className={`w-3.5 h-3.5 mr-1.5 ${isScoringRunning ? 'animate-spin' : ''}`} />
+            {isScoringRunning ? '测算中...' : !weightsValid ? '权重合计需为 100%' : '重新测算评分'}
           </button>
 
-          <button
-            onClick={downloadCandidateExcel}
-            className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 transition-colors shadow-xs cursor-pointer"
-            title="导出多工作表Excel（含候选明细及量化指标字典说明）"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-emerald-600" />
-            导出候选明细 (Excel)
-          </button>
+          {/* Export Deliverables Dropdown Menu */}
+          <div ref={exportMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setExportMenuOpen(prev => !prev)}
+              className="inline-flex items-center px-3 py-2 rounded-lg text-xs font-semibold bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 transition-colors shadow-xs cursor-pointer"
+            >
+              <FileDown className="w-3.5 h-3.5 mr-1 text-slate-500" />
+              <span>导出投研产物</span>
+              <ChevronDown className={`w-3.5 h-3.5 ml-1 text-slate-400 transition-transform duration-200 ${exportMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
 
-          <button
-            onClick={downloadResearchReportPdf}
-            className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 transition-colors shadow-xs cursor-pointer"
-            title="导出A4规格完整量化投研报告PDF"
-          >
-            <FileText className="w-3.5 h-3.5 mr-1 text-rose-600" />
-            导出研究报告 (PDF)
-          </button>
+            {exportMenuOpen && (
+              <div className="absolute right-0 mt-1 w-52 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl animate-in fade-in zoom-in-95 duration-100 z-30 text-xs">
+                <button
+                  onClick={() => {
+                    downloadCandidateExcel();
+                    setExportMenuOpen(false);
+                  }}
+                  className="w-full flex items-center px-2.5 py-2 rounded-lg text-left text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600 shrink-0" />
+                  <div>
+                    <div className="font-medium">导出候选明细 (Excel)</div>
+                    <div className="text-[10px] text-slate-400">多工作表与指标说明</div>
+                  </div>
+                </button>
 
-          <button
-            onClick={handleExportCSV}
-            className="inline-flex items-center px-3.5 py-2 rounded-xl text-xs font-medium bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 transition-colors shadow-xs cursor-pointer"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 mr-1 text-slate-500" />
-            导出候选 (CSV)
-          </button>
+                <button
+                  onClick={() => {
+                    downloadResearchReportPdf();
+                    setExportMenuOpen(false);
+                  }}
+                  className="w-full flex items-center px-2.5 py-2 rounded-lg text-left text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <FileText className="w-4 h-4 mr-2 text-rose-600 shrink-0" />
+                  <div>
+                    <div className="font-medium">导出研究报告 (PDF)</div>
+                    <div className="text-[10px] text-slate-400">标准 A4 规格报告排版</div>
+                  </div>
+                </button>
+
+                <div className="border-t border-slate-100 my-1" />
+
+                <button
+                  onClick={() => {
+                    handleExportCSV();
+                    setExportMenuOpen(false);
+                  }}
+                  className="w-full flex items-center px-2.5 py-2 rounded-lg text-left text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <FileDown className="w-4 h-4 mr-2 text-slate-500 shrink-0" />
+                  <div>
+                    <div className="font-medium">导出候选清单 (CSV)</div>
+                    <div className="text-[10px] text-slate-400">纯文本表格格式</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
