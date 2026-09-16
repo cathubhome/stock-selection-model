@@ -217,6 +217,72 @@ def _search_pinyin(universe_row: Dict[str, Any]) -> str:
     initials = str(universe_row.get('initials') or '').strip()
     return ' '.join(value for value in (full_pinyin, initials) if value)
 
+SW_L1_NAMES = [
+    '农林牧渔', '基础化工', '钢铁', '有色金属', '电子', '家用电器', '食品饮料',
+    '纺织服饰', '轻工制造', '医药生物', '公用事业', '交通运输', '房地产', '商贸零售',
+    '社会服务', '银行', '非银金融', '综合', '建筑材料', '建筑装饰', '电力设备',
+    '国防军工', '计算机', '传媒', '通信', '煤炭', '石油石化', '环保', '汽车',
+    '机械设备', '美容护理'
+]
+
+def _normalize_to_sw_l1(raw: str) -> str:
+    if not raw or not str(raw).strip():
+        return ''
+    clean = str(raw).strip()
+    for name in SW_L1_NAMES:
+        if clean == name or clean == name + '行业':
+            return name
+    for name in SW_L1_NAMES:
+        if name in clean:
+            return name
+    rules = [
+        (['专用机械', '通用机械', '专用设备', '通用设备', '自动化设备', '工业母机', '机床', '工控', '机器人', '仪器仪表', '轴承', '机械'], '机械设备'),
+        (['半导体', '集成电路', '芯片', '印制电路板', 'PCB', '被动元件', '元器件', '显示器件', '消费电子', '电子'], '电子'),
+        (['电池', '光伏', '风电', '储能', '电网', '电气设备', '电力设备', '输变电', '电源'], '电力设备'),
+        (['软件', 'IT服务', '计算机', '信息安全', '大数据', '互联网服务', '云计算'], '计算机'),
+        (['汽车', '零部件', '乘用车', '商用车', '载货车', '轮胎', '底盘'], '汽车'),
+        (['通信', '5G', '光通信', '光模块', '终端设备', '通信设备'], '通信'),
+        (['医药', '生物', '中药', '化学制药', '医疗器械', '疫苗', 'CXO', '制药'], '医药生物'),
+        (['化工', '化学', '氟化工', '无机盐', '制冷剂', '涂料', '化纤', '塑料', '聚氨酯'], '基础化工'),
+        (['铜', '铝', '锂', '钴', '有色', '金属新材料', '稀土', '贵金属', '黄金'], '有色金属'),
+        (['钢铁', '特钢', '普钢'], '钢铁'),
+        (['煤炭', '焦炭', '开采'], '煤炭'),
+        (['石油', '石化', '油气', '钻采', '炼化'], '石油石化'),
+        (['白酒', '啤酒', '调味品', '乳制品', '食品', '饮料'], '食品饮料'),
+        (['家电', '空调', '冰箱', '厨电', '小家电'], '家用电器'),
+        (['军工', '航空', '航天', '兵器', '船舶', '防务'], '国防军工'),
+        (['银行', '城商行', '农商行'], '银行'),
+        (['证券', '券商', '保险', '多元金融', '期货'], '非银金融'),
+        (['房地产', '地产', '物业', '园区开发'], '房地产'),
+        (['建筑装饰', '装修', '房屋建设', '园林', '幕墙', '工程设计'], '建筑装饰'),
+        (['建筑材料', '水泥', '玻璃', '玻纤', '陶瓷', '耐火材料'], '建筑材料'),
+        (['交通运输', '航运', '航空运输', '港口', '公路', '物流', '快递', '铁路'], '交通运输'),
+        (['公用事业', '电力', '水务', '燃气', '火电', '水电', '供暖'], '公用事业'),
+        (['环保', '固废', '污水', '环境治理'], '环保'),
+        (['农林牧渔', '种植', '生猪', '饲料', '养殖', '种子'], '农林牧渔'),
+        (['纺织', '服装', '服饰', '家纺', '男装', '女装'], '纺织服饰'),
+        (['轻工', '造纸', '包装', '家具', '家居', '文娱'], '轻工制造'),
+        (['商贸零售', '超市', '百货', '连锁', '跨境电商'], '商贸零售'),
+        (['社会服务', '旅游', '酒店', '餐饮', '景区', '教育'], '社会服务'),
+        (['美容护理', '化妆品', '医美'], '美容护理'),
+    ]
+    for keys, target in rules:
+        if any(k in clean for k in keys):
+            return target
+    return clean
+
+def _fetch_em_industry(symbol: str) -> str:
+    code = ('SH' if symbol.startswith(('6', '9')) else 'SZ') + symbol
+    url = f'http://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/CompanySurveyAjax?code={code}'
+    try:
+        resp = requests.get(url, timeout=3, headers={'User-Agent': 'Mozilla/5.0'})
+        if resp.status_code == 200:
+            jbzl = resp.json().get('jbzl', {})
+            return str(jbzl.get('sshy') or jbzl.get('sszjhhy') or '').strip()
+    except Exception:
+        pass
+    return ''
+
 def _expected_market_close_date(now: Optional[datetime] = None) -> pd.Timestamp:
     """Return the latest completed weekday trading session in China time."""
     current = now or datetime.now()
@@ -538,11 +604,12 @@ def search_universe(
     res = []
     for _, r in matched.iterrows():
         sym = str(r['symbol']).zfill(6)
+        raw_ind = str(industry_map.get(sym) or '')
         res.append({
             'symbol': sym,
             'name': str(r['name']),
             'pinyin': str(r.get('pinyin', '')),
-            'industry': str(industry_map.get(sym) or ''),
+            'industry': _normalize_to_sw_l1(raw_ind) if raw_ind else '',
             'market': _determine_market(sym),
         })
     return res
@@ -555,14 +622,24 @@ def lookup_universe_industry(symbol: str) -> Dict[str, Any]:
     name = str(match.iloc[0].get('name') or normalized_symbol) if not match.empty else normalized_symbol
     history = latest_metadata_snapshot(load_metadata_history(ARCHIVE_DATA_DIR), [normalized_symbol])
     if not history.empty and str(history.iloc[0].get('industry') or '').strip():
-        return {'symbol': normalized_symbol, 'name': name, 'industry': str(history.iloc[0]['industry']), 'source': str(history.iloc[0].get('source') or '本地元数据'), 'cached': True}
+        ind = _normalize_to_sw_l1(str(history.iloc[0]['industry']))
+        return {'symbol': normalized_symbol, 'name': name, 'industry': ind, 'source': str(history.iloc[0].get('source') or '本地元数据'), 'cached': True}
     try:
-        snapshot, report = fetch_current_metadata([normalized_symbol])
+        snapshot, report = fetch_current_metadata(symbols=[normalized_symbol])
         if not snapshot.empty:
             row = snapshot.iloc[0]
             industry = str(row.get('industry') or '').strip()
             if industry:
-                return {'symbol': normalized_symbol, 'name': name, 'industry': industry, 'source': str(row.get('source') or '实时元数据'), 'cached': False}
+                ind = _normalize_to_sw_l1(industry)
+                return {'symbol': normalized_symbol, 'name': name, 'industry': ind, 'source': str(row.get('source') or '实时元数据'), 'cached': False}
+    except Exception:
+        pass
+    try:
+        em_ind = _fetch_em_industry(normalized_symbol)
+        if em_ind:
+            ind = _normalize_to_sw_l1(em_ind)
+            if ind:
+                return {'symbol': normalized_symbol, 'name': name, 'industry': ind, 'source': '东财F10资料', 'cached': False}
     except Exception:
         pass
     return {'symbol': normalized_symbol, 'name': name, 'industry': '', 'source': '暂无可用申万行业数据', 'cached': False}

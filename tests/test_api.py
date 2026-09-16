@@ -20,6 +20,13 @@ def test_market_freshness_uses_last_completed_session():
     assert server._expected_market_close_date(server.datetime(2026, 9, 16, 16, 30)) == server.pd.Timestamp('2026-09-16')
     assert server._expected_market_close_date(server.datetime(2026, 9, 19, 10, 0)) == server.pd.Timestamp('2026-09-18')
 
+
+def test_sw_l1_normalization():
+    assert server._normalize_to_sw_l1('其它专用机械') == '机械设备'
+    assert server._normalize_to_sw_l1('集成电路') == '电子'
+    assert server._normalize_to_sw_l1('软件开发') == '计算机'
+    assert server._normalize_to_sw_l1('电池') == '电力设备'
+
 def test_api_universe_search():
     res = client.get("/api/universe/search?q=000001&limit=5")
     assert res.status_code == 200

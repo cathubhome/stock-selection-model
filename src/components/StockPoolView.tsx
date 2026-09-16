@@ -27,6 +27,13 @@ interface StockPoolViewProps {
   onRefreshPool?: () => Promise<void>;
 }
 
+const SW_L1_OPTIONS = [
+  '机械设备', '电子', '电力设备', '计算机', '医药生物', '基础化工', '汽车', '通信',
+  '有色金属', '国防军工', '食品饮料', '家用电器', '农林牧渔', '钢铁', '煤炭', '石油石化',
+  '建筑装饰', '建筑材料', '公用事业', '交通运输', '银行', '非银金融', '房地产', '商贸零售',
+  '社会服务', '轻工制造', '纺织服饰', '传媒', '环保', '美容护理', '综合'
+];
+
 export const StockPoolView: React.FC<StockPoolViewProps> = ({
   stocks,
   onAddStock,
@@ -46,6 +53,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   const [newSymbol, setNewSymbol] = useState('');
   const [newName, setNewName] = useState('');
   const [newIndustry, setNewIndustry] = useState('');
+  const [isFetchingIndustry, setIsFetchingIndustry] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null);
   const [isSyncingMeta, setIsSyncingMeta] = useState(false);
   const [syncMetaSuccess, setSyncMetaSuccess] = useState(false);
@@ -128,20 +136,53 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   };
 
   const handleSymbolChange = async (val: string) => {
-    setNewSymbol(val);
-    if (val.trim().length >= 2) {
-      const res = await searchUniverse(val.trim(), 5);
+    const clean = val.trim();
+    setNewSymbol(clean);
+    if (clean.length >= 2) {
+      const res = await searchUniverse(clean, 5);
       setSuggestions(res);
+      const exactMatch = res.find(s => s.symbol === clean);
+      if (exactMatch) {
+        if (!newName || newName === clean) setNewName(exactMatch.name);
+        if (exactMatch.industry) setNewIndustry(exactMatch.industry);
+      }
     } else {
       setSuggestions([]);
     }
+    if (clean.length === 6 && /^\d{6}$/.test(clean)) {
+      setIsFetchingIndustry(true);
+      try {
+        const indRes = await fetchUniverseIndustry(clean);
+        if (indRes) {
+          if (indRes.name && (!newName || newName === clean)) setNewName(indRes.name);
+          if (indRes.industry) setNewIndustry(indRes.industry);
+        }
+      } catch (err) {
+        console.warn('Auto fetch industry failed:', err);
+      } finally {
+        setIsFetchingIndustry(false);
+      }
+    }
   };
 
-  const handleSelectSuggestion = (item: { symbol: string; name: string; market: string; industry?: string }) => {
+  const handleSelectSuggestion = async (item: { symbol: string; name: string; market: string; industry?: string }) => {
     setNewSymbol(item.symbol);
     setNewName(item.name);
     setNewIndustry(item.industry || '');
     setSuggestions([]);
+    if (!item.industry) {
+      setIsFetchingIndustry(true);
+      try {
+        const indRes = await fetchUniverseIndustry(item.symbol);
+        if (indRes && indRes.industry) {
+          setNewIndustry(indRes.industry);
+        }
+      } catch (err) {
+        console.warn('Auto fetch industry on select failed:', err);
+      } finally {
+        setIsFetchingIndustry(false);
+      }
+    }
   };
 
   // Filtered stocks based on query & market
@@ -730,15 +771,30 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  申万一级行业
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-slate-700">
+                    申万一级行业
+                  </label>
+                  {isFetchingIndustry && (
+                    <span className="text-[11px] text-indigo-600 animate-pulse">自动匹配申万一级行业中...</span>
+                  )}
+                </div>
                 <input
                   type="text"
+                  list="sw-l1-options"
+                  placeholder="自动带出，或从申万一级行业下拉选择"
                   value={newIndustry}
                   onChange={(e) => setNewIndustry(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 outline-hidden"
                 />
+                <datalist id="sw-l1-options">
+                  {SW_L1_OPTIONS.map(opt => (
+                    <option key={opt} value={opt} />
+                  ))}
+                </datalist>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  已支持根据代码自动带出。用户亦可在申万宏源研究、新浪财经或东财/同花顺 F10 查看“所属申万行业”。
+                </p>
               </div>
 
               <div className="flex items-center justify-end space-x-2 pt-2">
