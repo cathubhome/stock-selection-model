@@ -116,6 +116,7 @@ export interface BacktestPeriod {
   benchmark_return: number;
   excess_return: number;
   cost_deducted?: number;
+  net_return?: number;
   turnover?: number;
 }
 

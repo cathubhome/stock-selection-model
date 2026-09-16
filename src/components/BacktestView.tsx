@@ -15,7 +15,8 @@ import {
   XCircle,
   BarChart3,
   PieChart,
-  Table as TableIcon
+  Table as TableIcon,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -615,16 +616,16 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
                     <td className="py-2.5 px-3 font-bold text-slate-800">第 {p.period_index} 期</td>
                     <td className="py-2.5 px-3 text-slate-500">{p.rebalance_date}</td>
                     <td className="py-2.5 px-3 font-sans text-slate-800 max-w-xs truncate">
-                      {p.holding_names.slice(0, 4).join(', ')} 等{p.holding_names.length}只
+                      {(p.holding_names || []).slice(0, 4).join(', ')} 等{(p.holding_names || []).length}只
                     </td>
-                    <td className={`py-2.5 px-3 font-bold ${p.period_return >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      {p.period_return >= 0 ? `+${p.period_return.toFixed(2)}%` : `${p.period_return.toFixed(2)}%`}
+                    <td className={`py-2.5 px-3 font-bold ${(p.period_return ?? 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      {(p.period_return ?? 0) >= 0 ? `+${(p.period_return ?? 0).toFixed(2)}%` : `${(p.period_return ?? 0).toFixed(2)}%`}
                     </td>
                     <td className="py-2.5 px-3 text-slate-600">
                       {p.benchmark_return >= 0 ? `+${p.benchmark_return.toFixed(2)}%` : `${p.benchmark_return.toFixed(2)}%`}
                     </td>
                     <td className="py-2.5 px-3 text-slate-400">
-                      -{p.cost_deducted.toFixed(2)}%
+                      -{(p.cost_deducted ?? 0).toFixed(2)}%
                     </td>
                     <td className={`py-2.5 px-3 font-bold ${p.excess_return >= 0 ? 'text-indigo-600' : 'text-slate-500'}`}>
                       {p.excess_return >= 0 ? `+${p.excess_return.toFixed(2)}%` : `${p.excess_return.toFixed(2)}%`}

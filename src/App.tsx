@@ -8,11 +8,17 @@ import { ResearchRunsView } from './components/ResearchRunsView';
 import { ResearchStep, ScoredStock, WeightConfig, ArchiveRun, ScoringConfig } from './types';
 import { RAW_REMOTE_STOCKS, ARCHIVE_RESEARCH_RUNS } from './data/remoteArchiveData';
 import { DEFAULT_WEIGHTS } from './utils/scoring';
-import { fetchSystemStatus, fetchStockPool, addPoolStocks, removePoolStock, fetchLatestScores, runScoring, fetchScoringProgress, fetchResearchRuns } from './api/client';
+import { fetchSystemStatus, fetchStockPool, addPoolStocks, removePoolStock, fetchLatestScores, runScoring, fetchScoringProgress, fetchResearchRuns, SystemStatusResponse } from './api/client';
 
 const LOCAL_STORAGE_KEY_POOL = 'a_share_stock_model_pool_v2';
 const LOCAL_STORAGE_KEY_WEIGHTS = 'a_share_stock_model_weights_v2';
 const LOCAL_STORAGE_KEY_STEP = 'a_share_stock_model_step_v2';
+
+const GithubIcon: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
+  <svg className={className} fill="currentColor" viewBox="0 0 24 24">
+    <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+  </svg>
+);
 
 export const App: React.FC = () => {
   // Load initial pool from localStorage or fallback to remote archive data (97 stocks)
@@ -77,12 +83,14 @@ export const App: React.FC = () => {
   const [isScoringRunning, setIsScoringRunning] = useState(false);
   const [scoringProgress, setScoringProgress] = useState<any | null>(null);
   const [isBackendOnline, setIsBackendOnline] = useState(false);
+  const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
 
   // Check backend and sync live data if available
   useEffect(() => {
     let isMounted = true;
     fetchSystemStatus().then((status) => {
       if (!isMounted) return;
+      setSystemStatus(status);
       if (status && status.status === 'online') {
         setIsBackendOnline(true);
         fetchStockPool().then((pool) => {
@@ -216,6 +224,7 @@ export const App: React.FC = () => {
         stockCount={poolStocks.length}
         onResetToDefault={handleResetToDefault}
         isBackendOnline={isBackendOnline}
+        marketData={systemStatus?.market_data}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -270,13 +279,28 @@ export const App: React.FC = () => {
 
       {/* Modern Quant Footer */}
       <footer className="bg-white border-t border-slate-200 py-6 text-slate-500 text-xs text-center">
-        <div className="max-w-7xl mx-auto px-4 space-y-1">
-          <p className="font-medium text-slate-700">
-            A股选股研究台 · 基于远程仓库 cathubhome/stock-selection-model 最新代码与数据架构
-          </p>
-          <p className="text-slate-400 text-[11px]">
-            五维综合打分 (模型 35% / 技术 25% / 量价 20% / K线 10% / 舆情 10%) · 滚动样本外无未来数据回测 · 保守量化门禁审计
-          </p>
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-left">
+          <div>
+            <p className="font-semibold text-slate-800">
+              AlphaCraft 智能量化选股平台
+            </p>
+            <p className="text-slate-400 text-[11px] font-normal mt-0.5">
+              多因子集成 (模型 / 技术 / 量价 / K线 / 舆情) · 滚动样本外无前瞻偏误回测 · 保守量化门禁审计
+            </p>
+          </div>
+          <div className="flex items-center space-x-3 text-[11px] text-slate-500 shrink-0">
+            <a
+              href="https://github.com/cathubhome/stock-selection-model"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center text-slate-600 hover:text-indigo-600 transition-colors font-medium"
+            >
+              <GithubIcon className="w-3.5 h-3.5 mr-1" />
+              <span>开源代码仓库</span>
+            </a>
+            <span className="text-slate-300">·</span>
+            <span className="text-slate-400 font-mono">v2.5 Fullstack</span>
+          </div>
         </div>
       </footer>
     </div>

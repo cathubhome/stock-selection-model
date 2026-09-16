@@ -25,14 +25,17 @@ import {
   Sparkles,
   FileDown,
   ChevronDown,
+  ChevronUp,
   CheckCircle2,
   Info,
   Calendar,
-  AlertTriangle
+  AlertTriangle,
+  HelpCircle
 } from 'lucide-react';
 import { ScoredStock, ScoringConfig, WeightConfig } from '../types';
 import { downloadCandidateExcel, downloadResearchReportPdf, fetchScoringContext, fetchSystemStatus, ScoringContextResponse, SystemStatusResponse } from '../api/client';
 import { DEFAULT_WEIGHTS } from '../utils/scoring';
+import { TermTooltip } from './TermTooltip';
 
 interface CompositeScoringViewProps {
   weights: WeightConfig;
@@ -63,6 +66,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
   const [scoringConfig, setScoringConfig] = useState<ScoringConfig>({ horizon: 20, top_k: 10, fetch_sentiment: true });
   const [exportMenuOpen, setExportMenuOpen] = useState<boolean>(false);
   const exportMenuRef = React.useRef<HTMLDivElement>(null);
+  const [showScoringLog, setShowScoringLog] = useState<boolean>(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -313,27 +317,78 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
 
       {scoringProgress ? (
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+          <div className="px-5 py-3.5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 bg-gradient-to-r from-slate-50 to-white">
             <div>
-              <h3 className="text-sm font-bold text-slate-900">评分测算明细</h3>
-              <p className={`text-xs mt-0.5 ${scoringProgress.error ? 'text-rose-600' : 'text-slate-500'}`}>
-                {scoringProgress.error || scoringProgress.message || '等待评分任务返回状态'}
+              <div className="flex items-center space-x-2">
+                <span className={`w-2 h-2 rounded-full ${scoringProgress.running ? 'bg-indigo-600 animate-ping' : scoringProgress.error ? 'bg-rose-500' : 'bg-emerald-500'}`} />
+                <h3 className="text-sm font-bold text-slate-900">评分测算进度</h3>
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-mono">
+                  {Math.round(scoringProgress.percent || 0)}%
+                </span>
+              </div>
+              <p className={`text-xs mt-1 ${scoringProgress.error ? 'text-rose-600 font-medium' : 'text-slate-500'}`}>
+                {scoringProgress.error || scoringProgress.message || '多因子滚动推演与证据对齐中...'}
               </p>
             </div>
-            <div className="text-right">
-              <span className="text-xs font-mono text-indigo-700">{Math.round(scoringProgress.percent || 0)}%</span>
-              {scoringProgress.elapsed_seconds != null && <span className="block text-[10px] text-slate-400">耗时 {scoringProgress.elapsed_seconds.toFixed(1)} 秒</span>}
+            <div className="flex items-center space-x-2">
+              {scoringProgress.elapsed_seconds != null && (
+                <span className="text-[11px] font-mono px-2 py-1 rounded bg-slate-100 text-slate-600">
+                  耗时 {scoringProgress.elapsed_seconds.toFixed(1)}s
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowScoringLog(prev => !prev)}
+                className="inline-flex items-center text-xs font-medium text-slate-600 hover:text-indigo-600 transition-colors px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"
+              >
+                <span>{showScoringLog ? '收起步骤日志' : `查看步骤日志 (${scoringProgress.details?.length || 0})`}</span>
+                {showScoringLog ? <ChevronUp className="w-3.5 h-3.5 ml-1" /> : <ChevronDown className="w-3.5 h-3.5 ml-1" />}
+              </button>
             </div>
           </div>
-          <div className="h-1.5 bg-slate-100"><div className={`h-full transition-all ${scoringProgress.error ? 'bg-rose-500' : 'bg-indigo-600'}`} style={{ width: `${Math.min(100, scoringProgress.percent || 0)}%` }} /></div>
-          <div className="max-h-56 overflow-y-auto px-4 py-2">
-            {(scoringProgress.details || []).map((detail: any, index: number) => (
-              <div key={`${detail.stage || detail.symbol || 'step'}-${index}`} className="flex items-center justify-between py-1.5 text-xs border-b border-slate-50 last:border-0">
-                <span className="text-slate-700">{detail.stage || '评分步骤'}{detail.symbol ? ` · ${detail.symbol}` : ''}</span>
-                <span className={detail.status === '失败' || detail.error ? 'text-rose-600' : detail.status === '完成' ? 'text-emerald-600' : 'text-indigo-600'}>{detail.error || detail.status || detail.note || '--'}</span>
-              </div>
-            ))}
+          <div className="h-1.5 bg-slate-100 w-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-300 ${scoringProgress.error ? 'bg-rose-500' : 'bg-gradient-to-r from-purple-500 via-indigo-600 to-emerald-500'}`}
+              style={{ width: `${Math.min(100, Math.max(5, scoringProgress.percent || 0))}%` }}
+            />
           </div>
+          {/* 4 Pipeline Stat Badges */}
+          <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 bg-white text-xs">
+            <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+              <span className="text-[11px] text-slate-400 block">模型算法状态</span>
+              <div className="font-bold text-slate-800 mt-0.5">
+                {scoringProgress.running ? '前向推演中' : scoringProgress.error ? '测算异常' : '测算已就绪'}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-purple-50/60 border border-purple-100/80">
+              <span className="text-[11px] text-purple-700 block">五维因子集成</span>
+              <div className="font-bold text-purple-900 mt-0.5">实时加权归一化</div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-emerald-50/60 border border-emerald-100/80">
+              <span className="text-[11px] text-emerald-700 block">候选标的产出</span>
+              <div className="font-bold text-emerald-900 mt-0.5">
+                {scoringProgress.result?.candidate_count ?? scoringConfig.top_k} 只核心标的
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+              <span className="text-[11px] text-slate-400 block">测算数据基准</span>
+              <div className="font-bold font-mono text-slate-700 mt-0.5">
+                {scoringProgress.result?.data_end || latestDataDate}
+              </div>
+            </div>
+          </div>
+          {showScoringLog && (
+            <div className="max-h-56 overflow-y-auto border-t border-slate-100 divide-y divide-slate-100 bg-white px-4 py-1 text-xs">
+              {(scoringProgress.details || []).map((detail: any, index: number) => (
+                <div key={`${detail.stage || detail.symbol || 'step'}-${index}`} className="flex items-center justify-between py-1.5">
+                  <span className="text-slate-700">{detail.stage || '评分步骤'}{detail.symbol ? ` · ${detail.symbol}` : ''}</span>
+                  <span className={detail.status === '失败' || detail.error ? 'text-rose-600 font-semibold' : detail.status === '完成' ? 'text-emerald-600 font-medium' : 'text-indigo-600'}>
+                    {detail.error || detail.status || detail.note || '--'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           {scoringProgress.result && (
             <div className="px-4 py-3 bg-emerald-50 border-t border-emerald-100 text-xs text-emerald-800">
               运行 {scoringProgress.result.run_id} · 数据 {scoringProgress.result.data_end} · 参与 {scoringProgress.result.scored_count} 只 · 候选 {scoringProgress.result.candidate_count} 只
@@ -404,13 +459,13 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
         {/* 5 Sliders Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {/* Model */}
-          <div className="bg-slate-50 p-3 rounded-lg border border-slate-200/80">
+          <div className="bg-purple-50/40 p-3 rounded-xl border border-purple-200/70 transition-shadow hover:shadow-xs">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-slate-800 flex items-center">
-                <BrainCircuit className="w-3.5 h-3.5 mr-1 text-indigo-600" />
-                模型评分
+              <span className="text-xs font-bold text-purple-900 flex items-center">
+                <BrainCircuit className="w-3.5 h-3.5 mr-1 text-purple-600" />
+                <TermTooltip term="模型评分">模型评分</TermTooltip>
               </span>
-              <span className="font-mono text-xs font-bold text-indigo-600">
+              <span className="font-mono text-xs font-bold text-purple-700">
                 {(weights.model * 100).toFixed(0)}%
               </span>
             </div>
@@ -421,19 +476,19 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
               step="5"
               value={Math.round(weights.model * 100)}
               onChange={(e) => handleSliderChange('model', Number(e.target.value))}
-              className="w-full accent-indigo-600 cursor-pointer"
+              className="w-full accent-purple-600 cursor-pointer"
             />
             <span className="text-[10px] text-slate-400 block mt-1">LightGBM超额预测</span>
           </div>
 
           {/* Technical */}
-          <div className="bg-slate-50 p-3 rounded-lg border border-slate-200/80">
+          <div className="bg-sky-50/40 p-3 rounded-xl border border-sky-200/70 transition-shadow hover:shadow-xs">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-bold text-slate-800 flex items-center">
-                <Activity className="w-3.5 h-3.5 mr-1 text-blue-600" />
-                技术面
+              <span className="text-xs font-bold text-sky-900 flex items-center">
+                <Activity className="w-3.5 h-3.5 mr-1 text-sky-600" />
+                <TermTooltip term="技术面">技术面</TermTooltip>
               </span>
-              <span className="font-mono text-xs font-bold text-blue-600">
+              <span className="font-mono text-xs font-bold text-sky-700">
                 {(weights.technical * 100).toFixed(0)}%
               </span>
             </div>
@@ -444,7 +499,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
               step="5"
               value={Math.round(weights.technical * 100)}
               onChange={(e) => handleSliderChange('technical', Number(e.target.value))}
-              className="w-full accent-blue-600 cursor-pointer"
+              className="w-full accent-sky-600 cursor-pointer"
             />
             <span className="text-[10px] text-slate-400 block mt-1">20/60日均线及动量</span>
           </div>
