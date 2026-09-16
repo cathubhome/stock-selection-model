@@ -33,12 +33,34 @@ def _normalize_symbol(value: object) -> str:
 
 def parse_pool_text(text: str, universe: pd.DataFrame | None = None) -> pd.DataFrame:
     """Parse codes/names pasted from a watchlist or exported text."""
-    rows = [{"symbol": code, "name": ""} for code in _extract_codes(text)]
-    result = pd.DataFrame(rows, columns=["symbol", "name"])
+    sw_names = [
+        '农林牧渔', '基础化工', '钢铁', '有色金属', '电子', '家用电器', '食品饮料',
+        '纺织服饰', '轻工制造', '医药生物', '公用事业', '交通运输', '房地产', '商贸零售',
+        '社会服务', '银行', '非银金融', '综合', '建筑材料', '建筑装饰', '电力设备',
+        '国防军工', '计算机', '传媒', '通信', '煤炭', '石油石化', '环保', '汽车',
+        '机械设备', '美容护理'
+    ]
+    rows = []
+    for raw_line in text.strip().splitlines():
+        line = raw_line.strip()
+        codes = _extract_codes(line)
+        if not codes:
+            continue
+        code = codes[0]
+        found_ind = ''
+        for ind in sw_names:
+            if ind in line:
+                found_ind = ind
+                break
+        rows.append({"symbol": code, "name": "", "industry": found_ind})
+    if not rows:
+        rows = [{"symbol": code, "name": "", "industry": ""} for code in _extract_codes(text)]
+    result = pd.DataFrame(rows, columns=["symbol", "name", "industry"]).drop_duplicates("symbol")
     if result.empty or universe is None or universe.empty:
         return result.drop_duplicates("symbol")
     names = universe[["symbol", "name"]].drop_duplicates("symbol")
-    return result.drop(columns=["name"]).merge(names, on="symbol", how="left").fillna("")
+    merged = result.drop(columns=["name"]).merge(names, on="symbol", how="left").fillna("")
+    return merged[["symbol", "name", "industry"]]
 
 
 def parse_pool_file(uploaded_file, universe: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -70,9 +92,9 @@ def parse_pool_file(uploaded_file, universe: pd.DataFrame | None = None) -> pd.D
 
 def load_pool(path: Path) -> pd.DataFrame:
     if not path.exists():
-        return pd.DataFrame(columns=["symbol", "name", "source", "added_at"])
+        return pd.DataFrame(columns=["symbol", "name", "industry", "source", "added_at"])
     frame = pd.read_csv(path, dtype={"symbol": str}).fillna("")
-    for column in ["source", "added_at"]:
+    for column in ["industry", "source", "added_at"]:
         if column not in frame:
             frame[column] = ""
     frame["symbol"] = frame["symbol"].map(_normalize_symbol)
@@ -82,9 +104,11 @@ def load_pool(path: Path) -> pd.DataFrame:
 def add_to_pool(path: Path, stocks: pd.DataFrame, source: str = "手工导入") -> pd.DataFrame:
     path.parent.mkdir(parents=True, exist_ok=True)
     existing = load_pool(path)
-    incoming = stocks[[column for column in ["symbol", "name"] if column in stocks.columns]].copy()
+    incoming = stocks[[column for column in ["symbol", "name", "industry"] if column in stocks.columns]].copy()
     incoming["symbol"] = incoming["symbol"].map(_normalize_symbol)
     incoming = incoming[incoming["symbol"].ne("")]
+    if "industry" not in incoming:
+        incoming["industry"] = ""
     incoming["source"] = source
     incoming["added_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     result = pd.concat([existing, incoming], ignore_index=True)

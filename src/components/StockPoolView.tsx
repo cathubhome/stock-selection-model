@@ -680,21 +680,21 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
               <form onSubmit={handleBatchSubmit} className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    粘贴股票代码或文本（支持换行、空格或逗号分隔，如 300476, 600519）
+                    粘贴股票代码或文本（支持换行或空格，支持带简称或行业）
                   </label>
                   <textarea
                     rows={6}
                     value={batchText}
                     onChange={(e) => setBatchText(e.target.value)}
                     placeholder="例如：
-300476 胜宏科技
-600519 贵州茅台
+300476 胜宏科技 电子
+688499 利元亨 机械设备
 002407 多氟多"
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
                     required
                   />
                   <span className="text-[11px] text-slate-400 block mt-1">
-                    系统将自动提取6位证券代码并与全市场目录关联匹配中文名称。
+                    系统将自动匹配标的简称与申万一级行业；同行中写明行业的将优先采用用户指定的行业。
                   </span>
                 </div>
 

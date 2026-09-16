@@ -98,12 +98,12 @@ export async function fetchStockPool(): Promise<ScoredStock[] | null> {
   }
 }
 
-export async function addPoolStocks(symbols: string[], source = 'Web界面添加'): Promise<boolean> {
+export async function addPoolStocks(symbols: string[], source = 'Web界面添加', name?: string, industry?: string): Promise<boolean> {
   try {
     const res = await fetch(API_BASE + '/pool', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ symbols, source }),
+      body: JSON.stringify({ symbols, source, name, industry }),
     });
     return res.ok;
   } catch {

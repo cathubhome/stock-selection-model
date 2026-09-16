@@ -74,6 +74,8 @@ _TASK_LOCK = threading.Lock()
 
 class PoolAddRequest(BaseModel):
     symbols: List[str] = Field(..., description='List of stock symbols to add')
+    name: Optional[str] = Field(default=None, description='Stock name')
+    industry: Optional[str] = Field(default=None, description='Shenwan Level-1 industry')
     source: str = Field(default='Web界面添加', description='Source description')
 
 
@@ -512,7 +514,11 @@ def get_stock_pool() -> List[Dict[str, Any]]:
             change_val = safe_float(s_info.get('daily_return')) * 100.0
         change = market_info.get('change', round(safe_float(change_val, 0.0), 2))
         turnover = market_info.get('turnover', round(safe_float(s_info.get('turnover')), 2))
-        industry = str(s_info.get('industry') or u_info.get('industry') or '综合')
+        pool_ind = str(row.get('industry') or '').strip()
+        score_ind = str(s_info.get('industry') or '').strip()
+        u_ind = str(u_info.get('industry') or '').strip()
+        raw_ind = pool_ind or score_ind or u_ind or '综合'
+        industry = _normalize_to_sw_l1(raw_ind) or '综合'
 
         result.append({
             'symbol': sym,
@@ -544,7 +550,17 @@ def add_stocks_to_pool(payload: PoolAddRequest) -> Dict[str, Any]:
         return {'ok': True, 'added': 0}
     clean_symbols = [str(s).strip().zfill(6) for s in payload.symbols if str(s).strip()]
     try:
-        stocks_df = pd.DataFrame({'symbol': clean_symbols})
+        universe = _load_universe_df()
+        u_map = universe.set_index('symbol')['name'].to_dict() if not universe.empty else {}
+        rows = []
+        for sym in clean_symbols:
+            name = payload.name or u_map.get(sym, sym)
+            ind = payload.industry or ''
+            if not ind:
+                info = lookup_universe_industry(sym)
+                ind = info.get('industry') or ''
+            rows.append({'symbol': sym, 'name': name, 'industry': _normalize_to_sw_l1(ind)})
+        stocks_df = pd.DataFrame(rows)
         updated = add_to_pool(POOL_PATH, stocks_df, source=payload.source)
         return {'ok': True, 'total': len(updated), 'added': len(clean_symbols)}
     except Exception as exc:
@@ -560,6 +576,16 @@ def batch_add_stocks(payload: PoolBatchRequest) -> Dict[str, Any]:
     if parsed.empty:
         raise HTTPException(status_code=400, detail='未能从粘贴文本中识别到有效的A股股票代码（例如：300476 或 600519）')
     try:
+        if 'industry' not in parsed.columns:
+            parsed['industry'] = ''
+        for idx, row in parsed.iterrows():
+            curr_ind = str(row.get('industry') or '').strip()
+            if curr_ind:
+                parsed.at[idx, 'industry'] = _normalize_to_sw_l1(curr_ind)
+            else:
+                sym = str(row['symbol']).zfill(6)
+                info = lookup_universe_industry(sym)
+                parsed.at[idx, 'industry'] = _normalize_to_sw_l1(info.get('industry') or '')
         updated = add_to_pool(POOL_PATH, parsed, source=payload.source)
         return {'ok': True, 'added': len(parsed), 'total': len(updated), 'symbols': parsed['symbol'].tolist()}
     except Exception as exc:
@@ -720,6 +746,8 @@ def sync_metadata() -> Dict[str, Any]:
         snapshot, report = fetch_current_metadata(symbols=symbols)
         if report.get('ok'):
             ARCHIVE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            if not snapshot.empty:
+                archive_metadata(snapshot, ARCHIVE_DATA_DIR)
             status_file = ARCHIVE_DATA_DIR / 'metadata_sync_status.json'
             status_file.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         return {'ok': True, 'report': report}

@@ -137,7 +137,7 @@ export const App: React.FC = () => {
     if (!poolStocks.some(s => s.symbol === newStock.symbol)) {
       setPoolStocks(prev => [newStock, ...prev]);
       if (isBackendOnline) {
-        addPoolStocks([newStock.symbol], newStock.source);
+        addPoolStocks([newStock.symbol], newStock.source, newStock.name, newStock.industry);
       }
     }
   };

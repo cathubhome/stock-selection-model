@@ -49,12 +49,19 @@ def test_api_pool_endpoints():
     assert del_res.json()["ok"] is True
 
 def test_api_pool_batch():
-    batch_text = "999991 测试股A\n999992 测试股B"
+    batch_text = "999991 测试股A 机械设备\n999992 测试股B 电子"
     res = client.post("/api/pool/batch", json={"text": batch_text, "source": "pytest批量导入"})
     assert res.status_code == 200
     data = res.json()
     assert data["ok"] is True
     assert data["added"] >= 1
+
+    pool_res = client.get("/api/pool")
+    assert pool_res.status_code == 200
+    pool_map = {item["symbol"]: item for item in pool_res.json()}
+    assert pool_map.get("999991", {}).get("industry") == "机械设备"
+    assert pool_map.get("999992", {}).get("industry") == "电子"
+
     client.delete("/api/pool/999991")
     client.delete("/api/pool/999992")
 
