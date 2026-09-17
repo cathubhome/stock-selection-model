@@ -784,41 +784,75 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col justify-between space-y-4">
           {activeStock ? (
             <div className="space-y-4">
-              {/* Header Info */}
+              {/* 1. 标的概览与现价（清爽大气两列布局，彻底消除丑陋小方框） */}
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <div>
                   <div className="flex items-center space-x-2">
                     <h3 className="text-lg font-bold text-slate-900">{activeStock.name}</h3>
                     <span className="text-xs font-mono text-slate-400">{activeStock.symbol}</span>
-                    <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-600">
-                      {activeStock.industry || '行业待补全'}
+                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                      {activeStock.industry || "行业待补全"}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    最新价 {activeStock.price == null ? '--' : `¥${fmtNum(activeStock.price, 2)}`} · 换手率 {activeStock.turnover == null ? '--' : `${fmtNum(activeStock.turnover, 2)}%`} · PE {fmtNum(activeStock.pe_ttm, 1)}
+                  <p className="text-xs text-slate-500 mt-1">
+                    最新价 {activeStock.price == null ? "--" : `¥${fmtNum(activeStock.price, 2)}`} · 换手率 {activeStock.turnover == null ? "--" : `${fmtNum(activeStock.turnover, 2)}%`} · PE {fmtNum(activeStock.pe_ttm, 1)}
                   </p>
                 </div>
 
-                <div className="text-right">
-                  <span className="text-[11px] text-slate-400 block">综合排名</span>
-                  <span className="text-xl font-extrabold text-indigo-600 font-mono">
-                    #{activeStock.rank}
-                  </span>
-                  {activeStock.rank_change && activeStock.rank_change !== '-' && <span className="block text-[10px] text-slate-500">较上次 {activeStock.rank_change}</span>}
+                <div className="text-right flex items-center space-x-3">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block font-medium">综合评分</span>
+                    <span className="text-2xl font-black text-indigo-600 font-mono tracking-tight">
+                      {fmtNum(activeStock.composite_score, 1)}
+                      <span className="text-xs font-normal text-slate-400 ml-0.5">分</span>
+                    </span>
+                  </div>
+                  <div className="pl-3 border-l border-slate-200/80">
+                    <span className="text-[10px] text-slate-400 block font-medium">全池排序</span>
+                    <span className="text-xl font-bold text-slate-900 font-mono">
+                      #{activeStock.rank}
+                    </span>
+                    {activeStock.rank_change && activeStock.rank_change !== "-" && (
+                      <span className="block text-[10px] text-slate-500 font-medium">较上次 {activeStock.rank_change}</span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-                            {/* 五维分项打分与各维度加权贡献（合并连贯呈现） */}
-              <div className="bg-slate-50/80 rounded-xl border border-slate-200/80 p-3.5 space-y-2.5">
-                <div className="flex items-center justify-between pb-1 border-b border-slate-200/60">
+              {/* 2. 【核心量化决策底牌】（上提到第二层级！一眼看到胜率、盈亏比与可信度） */}
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] text-slate-500 block font-medium">决策可信度</span>
+                  <div className="font-bold text-indigo-700 mt-1 truncate">
+                    {activeStock.credibility_score == null ? "待评估" : `${fmtNum(activeStock.credibility_score, 0)}分 (${activeStock.credibility_grade || "未分级"})`}
+                  </div>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] text-slate-500 block font-medium">历史胜率 / 盈亏比</span>
+                  <div className="font-bold text-slate-800 mt-1 truncate">
+                    {activeStock.odds_win_rate == null ? "未积累" : `${fmtNum(activeStock.odds_win_rate, 1)}%`} · {activeStock.odds_reward_risk == null ? "--" : `${fmtNum(activeStock.odds_reward_risk, 2)}R`}
+                  </div>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
+                  <span className="text-[10px] text-slate-500 block font-medium">高分条件胜率</span>
+                  <div className="font-bold text-slate-800 mt-1 truncate">
+                    {activeStock.conditional_win_rate == null ? "未积累样本" : `${(activeStock.conditional_win_rate * 100).toFixed(1)}%`}
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. 五维分项打分与各维度加权贡献（合并连贯呈现） */}
+              <div className="bg-slate-50/70 rounded-xl border border-slate-200/80 p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-200/60">
                   <div className="flex items-center space-x-1.5">
                     <h4 className="text-xs font-bold text-slate-800">五维分项打分与加权贡献</h4>
                     <span className="text-[10px] text-slate-400">(得分 × 权重 = 贡献)</span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                    总分 {(factorContribution.reduce((t, i) => t + i.contribution, 0)).toFixed(1)} 分
+                  <span className="text-[11px] font-mono text-slate-500">
+                    加权合计: <strong className="text-indigo-700 font-bold">+{fmtNum(activeStock.composite_score, 1)}分</strong>
                   </span>
                 </div>
+
                 <div className="space-y-2 text-xs">
                   {/* 模型 */}
                   <div className="flex items-center justify-between gap-2">
@@ -835,6 +869,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       </span>
                     </div>
                   </div>
+
                   {/* 技术 */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="w-24 text-slate-700 flex items-center shrink-0">
@@ -850,6 +885,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       </span>
                     </div>
                   </div>
+
                   {/* 量价 */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="w-24 text-slate-700 flex items-center shrink-0">
@@ -865,6 +901,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       </span>
                     </div>
                   </div>
+
                   {/* K线 */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="w-24 text-slate-700 flex items-center shrink-0">
@@ -880,6 +917,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                       </span>
                     </div>
                   </div>
+
                   {/* 舆情 */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="w-24 text-slate-700 flex items-center shrink-0">
@@ -896,65 +934,43 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                     </div>
                   </div>
                 </div>
-                {/* 条件胜率提示 */}
-                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                  <span className="text-slate-500">历史同高分区间条件胜率:</span>
-                  <span className="font-bold text-slate-800 font-mono">
-                    {activeStock.conditional_win_rate == null ? "未积累独立样本" : `${(activeStock.conditional_win_rate * 100).toFixed(1)}% (样本 ${activeStock.conditional_sample_count || 0} 期)`}
-                  </span>
-                </div>
               </div>
 
-              {/* Positive Evidence */}
+              {/* 4. 正向支撑证据 */}
               <div className="bg-emerald-50/70 border border-emerald-200/80 rounded-lg p-3">
                 <div className="flex items-center space-x-1.5 text-emerald-800 font-bold text-xs mb-1.5">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                   <span>正向支撑证据 (Positive Evidence)</span>
                 </div>
                 <ul className="text-xs text-emerald-900 space-y-1 pl-5 list-disc">
-                  {(activeStock.positive_evidences?.length ? activeStock.positive_evidences : ['当前没有达到展示条件的明确正面证据']).map((ev, i) => (
+                  {(activeStock.positive_evidences?.length ? activeStock.positive_evidences : ["当前没有达到展示条件的明确正面证据"]).map((ev, i) => (
                     <li key={i}>{ev}</li>
                   ))}
                 </ul>
               </div>
 
-              {/* Negative Evidence / Warning */}
+              {/* 5. 风险提示与警示 */}
               <div className="bg-amber-50/70 border border-amber-200/80 rounded-lg p-3">
                 <div className="flex items-center space-x-1.5 text-amber-800 font-bold text-xs mb-1.5">
                   <AlertTriangle className="w-4 h-4 text-amber-600" />
                   <span>风险提示与警示 (Risk & Warnings)</span>
                 </div>
                 <ul className="text-xs text-amber-900 space-y-1 pl-5 list-disc">
-                  {(activeStock.negative_evidences?.length ? activeStock.negative_evidences : ['当前没有达到展示条件的明确反面证据']).map((ev, i) => (
+                  {(activeStock.negative_evidences?.length ? activeStock.negative_evidences : ["当前没有达到展示条件的明确反面证据"]).map((ev, i) => (
                     <li key={i}>{ev}</li>
                   ))}
                 </ul>
               </div>
 
+              {/* 6. 数据与验证限制 */}
               <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
                 <div className="flex items-center space-x-1.5 text-slate-800 font-bold text-xs mb-1.5">
                   <Info className="w-4 h-4 text-slate-500" />
                   <span>数据与验证限制</span>
                 </div>
                 <ul className="text-xs text-slate-700 space-y-1 pl-5 list-disc">
-                  {(activeStock.limitations?.length ? activeStock.limitations : ['当前未识别到额外限制；历史表现仍不代表未来收益']).map((item, index) => <li key={index}>{item}</li>)}
+                  {(activeStock.limitations?.length ? activeStock.limitations : ["当前未识别到额外限制；历史表现仍不代表未来收益"]).map((item, index) => <li key={index}>{item}</li>)}
                 </ul>
-              </div>
-
-              {/* Odds & Credibility Quick Card */}
-              <div className="grid grid-cols-2 gap-2 pt-2 text-xs">
-                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                  <span className="text-[11px] text-slate-500 block">历史胜率 / 盈亏比</span>
-                  <div className="font-bold text-slate-800 mt-0.5">
-                    {activeStock.odds_win_rate == null ? '未积累' : `${fmtNum(activeStock.odds_win_rate, 1)}%`} · {activeStock.odds_reward_risk == null ? '--' : `${fmtNum(activeStock.odds_reward_risk, 2)}R`}
-                  </div>
-                </div>
-                <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
-                  <span className="text-[11px] text-slate-500 block">决策可信度评估</span>
-                  <div className="font-bold text-indigo-700 mt-0.5">
-                    {activeStock.credibility_score == null ? '待评估' : `${fmtNum(activeStock.credibility_score, 0)}分 (${activeStock.credibility_grade || '未分级'})`}
-                  </div>
-                </div>
               </div>
             </div>
           ) : (
@@ -963,7 +979,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
         </div>
       </div>
 
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 space-y-4">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-slate-100">
           <div>
             <div className="flex items-center space-x-2">
