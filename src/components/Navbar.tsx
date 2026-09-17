@@ -20,7 +20,6 @@ interface NavbarProps {
   currentStep: ResearchStep;
   onSelectStep: (step: ResearchStep) => void;
   stockCount: number;
-  onResetToDefault: () => void;
   isBackendOnline?: boolean;
   marketData?: { latest_date: string | null; age_days: number | null } | null;
 }
@@ -37,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentStep,
   onSelectStep,
   stockCount,
-  onResetToDefault,
+  
   isBackendOnline = false,
   marketData = null,
 }) => {
@@ -88,15 +87,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></span>
               本地池标的: <strong className="ml-1 text-slate-900">{stockCount}</strong> 只
             </div>
-
-            <button
-              onClick={onResetToDefault}
-              title="重置为初始研究状态"
-              className="inline-flex items-center px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 bg-white hover:bg-slate-100 border border-slate-300 transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5 mr-1 text-slate-500" />
-              恢复默认
-            </button>
 
             <a
               href="https://github.com/cathubhome/stock-selection-model"

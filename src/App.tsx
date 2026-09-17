@@ -95,6 +95,10 @@ export const App: React.FC = () => {
         setIsBackendOnline(true);
         fetchStockPool().then((pool) => {
           if (isMounted && pool && pool.length > 0) setPoolStocks(pool);
+        const savedScoreTask = localStorage.getItem('active_scoring_task_id');
+        if (savedScoreTask) {
+          pollScoringTask(savedScoreTask);
+        }
         });
         fetchLatestScores().then((scoresRes) => {
           if (!isMounted) return;
@@ -174,6 +178,39 @@ export const App: React.FC = () => {
     }
   };
 
+  const pollScoringTask = async (taskId: string) => {
+    setIsScoringRunning(true);
+    localStorage.setItem('active_scoring_task_id', taskId);
+    try {
+      while (true) {
+        const progress = await fetchScoringProgress(taskId);
+        setScoringProgress(progress);
+        if (!progress.running) {
+          localStorage.removeItem('active_scoring_task_id');
+          if (progress.error) throw new Error(progress.error);
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      }
+      const scoresRes = await fetchLatestScores();
+      if (scoresRes && scoresRes.stocks && scoresRes.stocks.length > 0) {
+        setStocks(scoresRes.stocks);
+      }
+      const runs = await fetchResearchRuns();
+      if (runs && runs.length > 0) {
+        setResearchRuns(runs);
+      }
+    } catch (err) {
+      localStorage.removeItem('active_scoring_task_id');
+      const message = err instanceof Error ? err.message : '评分任务失败';
+      setScoringProgress((current: any) => ({
+        ...(current || {}), running: false, error: message, message: `评分失败：${message}`,
+      }));
+    } finally {
+      setIsScoringRunning(false);
+    }
+  };
+
   const handleRunScoring = async (config: ScoringConfig) => {
     setIsScoringRunning(true);
     if (isBackendOnline) {
@@ -184,30 +221,13 @@ export const App: React.FC = () => {
           weights,
         });
         if (task?.task_id) {
-          while (true) {
-            const progress = await fetchScoringProgress(task.task_id);
-            setScoringProgress(progress);
-            if (!progress.running) {
-              if (progress.error) throw new Error(progress.error);
-              break;
-            }
-            await new Promise(resolve => setTimeout(resolve, 1200));
-          }
-        }
-        const scoresRes = await fetchLatestScores();
-        if (scoresRes && scoresRes.stocks && scoresRes.stocks.length > 0) {
-          setStocks(scoresRes.stocks);
-        }
-        const runs = await fetchResearchRuns();
-        if (runs && runs.length > 0) {
-          setResearchRuns(runs);
+          await pollScoringTask(task.task_id);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : '评分任务失败';
         setScoringProgress((current: any) => ({
           ...(current || {}), running: false, error: message, message: `评分失败：${message}`,
         }));
-      } finally {
         setIsScoringRunning(false);
       }
       return;
@@ -222,7 +242,7 @@ export const App: React.FC = () => {
         currentStep={currentStep}
         onSelectStep={setCurrentStep}
         stockCount={poolStocks.length}
-        onResetToDefault={handleResetToDefault}
+        
         isBackendOnline={isBackendOnline}
         marketData={systemStatus?.market_data}
       />
@@ -230,7 +250,8 @@ export const App: React.FC = () => {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {currentStep === '研究看板' && (
           <ResearchDashboardView
-            stocks={stocks}
+            stocks={poolStocks}
+            candidates={stocks}
             onNavigate={setCurrentStep}
             onSelectStock={(stock) => {
               setCurrentStep('综合评分');

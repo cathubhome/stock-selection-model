@@ -17,12 +17,14 @@ import { fetchResearchLinkage, fetchSystemStatus, SystemStatusResponse } from '.
 
 interface ResearchDashboardViewProps {
   stocks: ScoredStock[];
+  candidates?: ScoredStock[];
   onNavigate: (step: ResearchStep) => void;
   onSelectStock: (stock: ScoredStock) => void;
 }
 
 export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
   stocks,
+  candidates = [],
   onNavigate,
   onSelectStock,
 }) => {
@@ -34,7 +36,11 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
     fetchResearchLinkage().then(setLinkage);
   }, []);
 
-  const topStocks = stocks.slice(0, 5);
+  const candidateList = candidates && candidates.length > 0 ? candidates : stocks;
+  const topStocks = candidateList.slice(0, 5);
+  const latestScoreDate = linkage?.score_data_end || status?.latest_score_run?.date || candidates?.[0]?.date || '最近交易日';
+  const validIndustryCount = stocks.filter(s => s.industry && s.industry !== '综合' && s.industry !== '待补全').length;
+  const industryRate = stocks.length > 0 ? ((validIndustryCount / stocks.length) * 100).toFixed(1) : '0.0';
   const marketSentiment = status?.market_sentiment || LATEST_MARKET_SENTIMENT;
   const metadataStatus = status?.metadata_status || REMOTE_METADATA_STATUS;
 
@@ -96,7 +102,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
             1. 本地池与行情数据
           </h3>
           <p className="text-xs text-slate-500 mt-1.5">
-            当前本地股票池共 <strong>{stocks.length}</strong> 只标的，行业覆盖率 {(metadataStatus.industry_coverage * 100).toFixed(1)}%，无未来函数。
+            当前本地股票池共 <strong>{stocks.length}</strong> 只标的，行业覆盖率 {industryRate}%，无未来函数。
           </p>
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-indigo-600 font-medium">
             <span>进入股票池与质量诊断</span>
@@ -114,7 +120,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
               <Sliders className="w-5 h-5" />
             </div>
             <span className="inline-flex items-center text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-              <CheckCircle2 className="w-3 h-3 mr-1" /> 2026-09-05 已评分
+              <CheckCircle2 className="w-3 h-3 mr-1" /> {latestScoreDate} 已评分
             </span>
           </div>
           <h3 className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">
@@ -232,18 +238,18 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
             <div className="border border-slate-100 rounded-lg p-3 bg-slate-50/50">
               <span className="text-xs text-slate-500">行业覆盖率</span>
               <p className="text-lg font-bold text-slate-900 mt-0.5">
-                {(metadataStatus.industry_coverage * 100).toFixed(1)}%
+                {industryRate}%
               </p>
               <span className="text-[10px] text-slate-500">申万一级行业</span>
             </div>
             <div className="border border-slate-100 rounded-lg p-3 bg-slate-50/50">
               <span className="text-xs text-slate-500">市值覆盖率</span>
-              <p className="text-lg font-bold text-slate-900 mt-0.5">100.0%</p>
+              <p className="text-lg font-bold text-slate-900 mt-0.5">{((metadataStatus?.market_cap_coverage ?? 1) * 100).toFixed(1)}%</p>
               <span className="text-[10px] text-slate-500">总市值/流通市值</span>
             </div>
             <div className="border border-slate-100 rounded-lg p-3 bg-slate-50/50">
               <span className="text-xs text-slate-500">行情有效性</span>
-              <p className="text-lg font-bold text-emerald-700 mt-0.5">通过对齐</p>
+              <p className="text-lg font-bold text-emerald-700 mt-0.5">{status?.market_data?.age_days === 0 ? '已同步最新' : `滞后 ${status?.market_data?.age_days ?? 0} 日`}</p>
               <span className="text-[10px] text-emerald-600">无缺失停牌交易日</span>
             </div>
           </div>
@@ -266,7 +272,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
           <div>
             <h3 className="text-base font-bold text-slate-900 flex items-center space-x-2">
               <Award className="w-5 h-5 text-amber-500" />
-              <span>最新综合评分前五候选标的 (2026-09-05 截面)</span>
+              <span>最新综合评分前五候选标的 ({latestScoreDate} 截面)</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               经过五因子加权、正负向证据校验与决策可信度评估后的核心入选标的
@@ -276,7 +282,7 @@ export const ResearchDashboardView: React.FC<ResearchDashboardViewProps> = ({
             onClick={() => onNavigate('综合评分')}
             className="inline-flex items-center text-xs font-semibold text-indigo-600 hover:text-indigo-800"
           >
-            <span>查看完整 97 只标的与参数配置</span>
+            <span>查看完整 {stocks.length} 只标的与参数配置</span>
             <ArrowRight className="w-4 h-4 ml-1" />
           </button>
         </div>

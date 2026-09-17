@@ -230,10 +230,13 @@ def estimate_conditional_signal_stats(
     history["score_percentile"] = history.groupby("date")["composite_score"].rank(pct=True, method="average")
     history = history[history["score_percentile"] >= float(score_quantile)]
 
+    if "future_return" in history.columns:
+        history = history.drop(columns=["future_return"])
+
     outcomes = frame[["date", "symbol", "future_return"]].dropna().copy()
     outcomes["date"] = pd.to_datetime(outcomes["date"])
     outcomes["symbol"] = outcomes["symbol"].astype(str).str.zfill(6)
-    matched = history.merge(outcomes, on=["date", "symbol"], how="inner")
+    matched = history.merge(outcomes, on=["date", "symbol"], how="inner", suffixes=("_history", ""))
     if matched.empty:
         return pd.DataFrame(columns=columns)
     calendar = {date: index for index, date in enumerate(sorted(pd.to_datetime(frame["date"]).unique()))}

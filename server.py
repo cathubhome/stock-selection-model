@@ -298,27 +298,47 @@ def _expected_market_close_date(now: Optional[datetime] = None) -> pd.Timestamp:
 
 def _market_data_freshness() -> Dict[str, Any]:
     latest_dates: List[pd.Timestamp] = []
-    for path in RAW_DATA_DIR.glob('*.parquet'):
+    pool_symbols = set(_pool_symbols())
+    target_paths = [RAW_DATA_DIR / f"{s}.parquet" for s in pool_symbols] if pool_symbols else list(RAW_DATA_DIR.glob('*.parquet'))
+    target_paths = [p for p in target_paths if p.exists()]
+    universe = _load_universe_df()
+    name_map = universe.set_index('symbol')['name'].to_dict() if not universe.empty else {}
+    symbol_dates = []
+    for path in target_paths:
         try:
             dates = pd.read_parquet(path, columns=['date'])['date']
             latest_date = pd.to_datetime(dates, errors='coerce').max()
             if pd.notna(latest_date):
-                latest_dates.append(pd.Timestamp(latest_date).normalize())
+                norm_date = pd.Timestamp(latest_date).normalize()
+                latest_dates.append(norm_date)
+                sym = path.stem
+                symbol_dates.append((sym, name_map.get(sym, sym), norm_date))
         except Exception:
             continue
     if not latest_dates:
-        return {'latest_date': None, 'oldest_date': None, 'expected_latest_date': _expected_market_close_date().strftime('%Y-%m-%d'), 'age_days': None, 'updated_symbols': 0, 'stale_symbols': 0}
+        return {'latest_date': None, 'oldest_date': None, 'expected_latest_date': _expected_market_close_date().strftime('%Y-%m-%d'), 'age_days': None, 'updated_symbols': 0, 'stale_symbols': 0, 'stale_details': []}
     newest = max(latest_dates)
     oldest = min(latest_dates)
     expected_latest = _expected_market_close_date()
     missing_sessions = len(pd.bdate_range(newest + pd.Timedelta(days=1), expected_latest)) if newest < expected_latest else 0
+    stale_details = [
+        {
+            'symbol': s,
+            'name': n,
+            'latest_date': d.strftime('%Y-%m-%d'),
+            'lag_days': (newest - d).days,
+            'reason': '近期无交易日成交（疑似停牌）' if (newest - d).days <= 10 else '长期停牌或历史数据未更新',
+        }
+        for s, n, d in symbol_dates if d < newest
+    ]
     return {
         'latest_date': newest.strftime('%Y-%m-%d'),
         'oldest_date': oldest.strftime('%Y-%m-%d'),
         'expected_latest_date': expected_latest.strftime('%Y-%m-%d'),
         'age_days': missing_sessions,
         'updated_symbols': len(latest_dates),
-        'stale_symbols': sum(date < newest for date in latest_dates),
+        'stale_symbols': len(stale_details),
+        'stale_details': stale_details,
     }
 
 
