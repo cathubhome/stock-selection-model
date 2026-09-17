@@ -812,6 +812,37 @@ def repair_data_quality() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f'修复下载失败: {exc}')
 
 
+_META_QUOTE_CACHE: Dict[str, Dict[str, Any]] = {}
+
+def _get_security_quote_meta(symbol: str) -> Dict[str, Any]:
+    sym = symbol.strip().zfill(6)
+    if sym in _META_QUOTE_CACHE:
+        return _META_QUOTE_CACHE[sym]
+    ind_info = lookup_universe_industry(sym)
+    ind = ind_info.get("industry") or ""
+    pe_val, pb_val, cap_val = None, None, None
+    try:
+        prefix = "sh" if sym.startswith(("5", "6", "9")) else "sz"
+        url = f"http://qt.gtimg.cn/q={prefix}{sym}"
+        resp = requests.get(url, timeout=3, headers={"User-Agent": "Mozilla/5.0", "Referer": "http://gu.qq.com/"})
+        if resp.status_code == 200:
+            fields = resp.content.decode("gbk", errors="ignore").split("~")
+            if len(fields) > 46:
+                pe_val = safe_float(fields[39])
+                pb_val = safe_float(fields[46])
+                cap_yi = safe_float(fields[45])
+                cap_val = cap_yi * 1e8 if cap_yi else None
+    except Exception:
+        pass
+    res = {
+        "industry": _normalize_to_sw_l1(ind) or "综合",
+        "pe_ttm": pe_val,
+        "pb": pb_val,
+        "market_cap": cap_val,
+    }
+    _META_QUOTE_CACHE[sym] = res
+    return res
+
 @app.get('/api/scores/latest')
 def get_latest_scores() -> Dict[str, Any]:
     scores_file = OUTPUT_DIR / 'latest_picks.csv'
@@ -867,6 +898,18 @@ def get_latest_scores() -> Dict[str, Any]:
             target.append(f'相似高分历史样本的条件胜率为 {conditional_win:.1%}')
         industry = optional_text(row.get('industry'), u_info.get('industry'))
         market_cap = optional_float(row.get('market_cap'))
+        pe_ttm_val = optional_float(row.get('pe_ttm'), 2)
+        pb_val = optional_float(row.get('pb'), 2)
+        if not industry or industry in ('综合', '行业待补全') or pe_ttm_val is None:
+            q_meta = _get_security_quote_meta(sym)
+            if not industry or industry in ('综合', '行业待补全'):
+                industry = q_meta.get('industry') or industry
+            if pe_ttm_val is None and q_meta.get('pe_ttm') is not None:
+                pe_ttm_val = optional_float(q_meta.get('pe_ttm'), 2)
+            if pb_val is None and q_meta.get('pb') is not None:
+                pb_val = optional_float(q_meta.get('pb'), 2)
+            if market_cap is None and q_meta.get('market_cap') is not None:
+                market_cap = optional_float(q_meta.get('market_cap'))
         limitations: List[str] = []
         if conditional_count is None:
             limitations.append('条件高分历史样本尚未积累')
@@ -890,8 +933,8 @@ def get_latest_scores() -> Dict[str, Any]:
             'turnover': optional_float(row.get('turnover'), 2),
             'volume': optional_float(row.get('volume')),
             'amount': optional_float(row.get('amount')),
-            'pe_ttm': optional_float(row.get('pe_ttm'), 2),
-            'pb': optional_float(row.get('pb'), 2),
+            'pe_ttm': pe_ttm_val,
+            'pb': pb_val,
             'market_cap': market_cap,
             'model_raw': optional_float(row.get('model_raw'), 6),
             'model_score': factor_values['模型评分'],
@@ -1161,6 +1204,71 @@ def get_latest_backtest() -> Dict[str, Any]:
         'periods': period_list,
     }
 
+
+def _background_backtest(task_id: str, payload: BacktestRunRequest) -> None:
+    symbols = _pool_symbols()
+    if not symbols:
+        with _TASK_LOCK:
+            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'error': '股票池为空', 'message': '回测失败：股票池为空'}
+        return
+    try:
+        with _TASK_LOCK:
+            _TASK_STATUS[task_id] = {'running': True, 'percent': 5.0, 'message': '正在构建技术与量价特征...', 'current': 0, 'total': 0, 'error': None}
+        panel = _load_pool_panel(symbols)
+        frame, features = build_features(panel, horizon=payload.horizon)
+        weights_dict = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
+
+        benchmark_series = None
+        benchmark_label = "股票池等权基准 (未连接外部指数)"
+        if payload.benchmark:
+            benchmark_file = REF_DATA_DIR / 'benchmarks' / f'index_{payload.benchmark}.parquet'
+            if benchmark_file.exists():
+                df_bm = pd.read_parquet(benchmark_file)
+                benchmark_series = prepare_benchmark_returns(df_bm, horizon=payload.horizon)
+                benchmark_label = f"指数基准 ({payload.benchmark})"
+
+        def bt_progress(idx: int, total: int, dt: pd.Timestamp):
+            pct = round(idx / max(1, total) * 100, 1)
+            date_str = str(dt.date())
+            with _TASK_LOCK:
+                _TASK_STATUS[task_id] = {
+                    'running': True, 'current': idx, 'total': total,
+                    'percent': pct, 'message': f'正在滚动推演第 [{idx}/{total}] 期调仓 ({date_str})...',
+                    'date': date_str, 'error': None
+                }
+
+        periods_df, metrics = run_walk_forward_backtest(
+            frame=frame,
+            features=features,
+            horizon=payload.horizon,
+            top_k=payload.top_k,
+            weights=weights_dict,
+            transaction_cost_bps=payload.transaction_cost_bps,
+            benchmark_returns=benchmark_series,
+            benchmark_name=benchmark_label,
+            progress=bt_progress,
+        )
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        periods_df.to_csv(OUTPUT_DIR / 'backtest_periods.csv', index=False)
+        (OUTPUT_DIR / 'backtest_metrics.json').write_text(
+            json.dumps(metrics, ensure_ascii=False, indent=2), encoding='utf-8'
+        )
+        with _TASK_LOCK:
+            _TASK_STATUS[task_id] = {
+                'running': False, 'percent': 100.0, 'current': len(periods_df), 'total': len(periods_df),
+                'message': f'回测已完成，共推演 {len(periods_df)} 期样本外调仓', 'error': None
+            }
+    except Exception as exc:
+        with _TASK_LOCK:
+            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'error': str(exc), 'message': f'回测运行失败: {exc}'}
+
+@app.get('/api/backtest/run-progress')
+def get_backtest_progress(task_id: str = Query(...)) -> Dict[str, Any]:
+    with _TASK_LOCK:
+        status = _TASK_STATUS.get(task_id)
+    if not status:
+        return {'running': False, 'percent': 100.0, 'message': '未找到回测任务或任务已结束', 'error': None}
+    return status
 
 @app.post('/api/backtest/run')
 def run_backtest(payload: BacktestRunRequest) -> Dict[str, Any]:

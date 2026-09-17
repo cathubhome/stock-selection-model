@@ -16,7 +16,11 @@ import {
   BarChart3,
   PieChart,
   Table as TableIcon,
-  AlertTriangle
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
+  Sliders
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -35,7 +39,7 @@ import {
 } from 'recharts';
 import { BacktestConfig, ScoredStock } from '../types';
 import { runWalkForwardBacktest } from '../utils/backtest';
-import { fetchLatestBacktest, runBacktest, LatestBacktestResponse, fetchGovernanceStatus, GovernanceStatusResponse, downloadBacktestCsv } from '../api/client';
+import { fetchLatestBacktest, fetchBacktestProgress, runBacktest, LatestBacktestResponse, fetchGovernanceStatus, GovernanceStatusResponse, downloadBacktestCsv } from '../api/client';
 import { Download } from 'lucide-react';
 import { useEffect } from 'react';
 
@@ -60,6 +64,10 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [serverBacktestResult, setServerBacktestResult] = useState<LatestBacktestResponse | null>(null);
   const [govStatus, setGovStatus] = useState<GovernanceStatusResponse | null>(null);
+  const [backtestProgress, setBacktestProgress] = useState<any | null>(null);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
+  const [periodPage, setPeriodPage] = useState<number>(1);
+  const periodPageSize = 15;
 
   useEffect(() => {
     fetchGovernanceStatus().then(res => {
@@ -75,10 +83,45 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
         setServerBacktestResult(res);
       }
     });
+    const savedBtTask = localStorage.getItem("active_backtest_task_id");
+    if (savedBtTask) {
+      pollBacktestTask(savedBtTask);
+    }
     return () => {
       isMounted = false;
     };
   }, []);
+
+  const pollBacktestTask = (taskId: string) => {
+    setIsRecalculating(true);
+    setBacktestError(null);
+    localStorage.setItem("active_backtest_task_id", taskId);
+    const timer = setInterval(async () => {
+      try {
+        const prog = await fetchBacktestProgress(taskId);
+        setBacktestProgress(prog);
+        if (!prog.running) {
+          clearInterval(timer);
+          localStorage.removeItem("active_backtest_task_id");
+          setIsRecalculating(false);
+          if (prog.error) {
+            setBacktestError(prog.error);
+          } else {
+            const latest = await fetchLatestBacktest();
+            if (latest && latest.metrics && latest.curve?.length) {
+              setServerBacktestResult(latest);
+            }
+            fetchGovernanceStatus().then(g => { if (g) setGovStatus(g); });
+          }
+        }
+      } catch (e: any) {
+        clearInterval(timer);
+        localStorage.removeItem("active_backtest_task_id");
+        setIsRecalculating(false);
+        setBacktestError(e?.message || "回测进度轮询异常");
+      }
+    }, 1200);
+  };
 
   const fallbackResult = useMemo(() => {
     return runWalkForwardBacktest(stocks, config);
@@ -86,10 +129,12 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
 
   const handleRerun = async () => {
     setIsRecalculating(true);
+    setBacktestError(null);
+    setBacktestProgress({ running: true, percent: 5, message: "正在初始化前向滚动回测引擎..." });
     try {
-      let bmCode = '000300';
-      if (config.benchmark.includes('000905') || config.benchmark.includes('500')) bmCode = '000905';
-      else if (config.benchmark.includes('000852') || config.benchmark.includes('1000')) bmCode = '000852';
+      let bmCode = "000300";
+      if (config.benchmark.includes("000905") || config.benchmark.includes("500")) bmCode = "000905";
+      else if (config.benchmark.includes("000852") || config.benchmark.includes("1000")) bmCode = "000852";
 
       const res = await runBacktest({
         horizon: config.horizon,
@@ -97,20 +142,28 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
         transaction_cost_bps: config.transaction_cost_bps,
         benchmark: bmCode,
       });
-      fetchGovernanceStatus().then(g => { if (g) setGovStatus(g); });
-      if (res && res.metrics && res.curve && res.curve.length > 0) {
-        setServerBacktestResult(res);
+      if (res && res.task_id) {
+        pollBacktestTask(res.task_id);
+      } else {
+        const latest = await fetchLatestBacktest();
+        if (latest) setServerBacktestResult(latest);
         setIsRecalculating(false);
-        return;
       }
-    } catch (err) {
-      console.error('FastAPI backtest error, using client fallback:', err);
-    }
-
-    setTimeout(() => {
-      setServerBacktestResult(null);
+    } catch (err: any) {
       setIsRecalculating(false);
-    }, 400);
+      setBacktestProgress(null);
+      setBacktestError(err?.message || "回测启动失败");
+    }
+  };
+
+  const handleSyncScoringConfig = () => {
+    try {
+      const saved = localStorage.getItem("a_share_stock_model_weights_v2");
+      if (saved) {
+        const w = JSON.parse(saved);
+        setConfig(c => ({ ...c, horizon: 20, top_k: 10 }));
+      }
+    } catch {}
   };
 
   const effectiveResult = serverBacktestResult || fallbackResult;
@@ -611,7 +664,7 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {periods.map((p) => (
+                {periods.slice((periodPage - 1) * periodPageSize, periodPage * periodPageSize).map((p) => (
                   <tr key={p.period_index} className="hover:bg-slate-50">
                     <td className="py-2.5 px-3 font-bold text-slate-800">第 {p.period_index} 期</td>
                     <td className="py-2.5 px-3 text-slate-500">{p.rebalance_date}</td>
@@ -635,6 +688,31 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
               </tbody>
             </table>
           </div>
+          {/* 调仓明细分页控制器 */}
+          {periods.length > periodPageSize && (
+            <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between text-xs bg-slate-50/50">
+              <span className="text-slate-500">第 {periodPage} / {Math.ceil(periods.length / periodPageSize)} 页 · 共 {periods.length} 期样本外调仓</span>
+              <div className="flex items-center space-x-1">
+                <button
+                  type="button"
+                  disabled={periodPage <= 1}
+                  onClick={() => setPeriodPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50"
+                >
+                  上一页
+                </button>
+                <span className="px-2 font-mono text-slate-700">{periodPage}</span>
+                <button
+                  type="button"
+                  disabled={periodPage >= Math.ceil(periods.length / periodPageSize)}
+                  onClick={() => setPeriodPage(p => p + 1)}
+                  className="px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50"
+                >
+                  下一页
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

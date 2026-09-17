@@ -244,13 +244,21 @@ export async function fetchLatestBacktest(): Promise<LatestBacktestResponse | nu
   }
 }
 
+export async function fetchBacktestProgress(taskId: string): Promise<TaskProgressResponse> {
+  const res = await fetch(API_BASE + '/backtest/run-progress?task_id=' + encodeURIComponent(taskId));
+  if (!res.ok) {
+    return { running: false, percent: 100, message: '无法获取回测进度' };
+  }
+  return await res.json();
+}
+
 export async function runBacktest(payload: {
   horizon?: number;
   top_k?: number;
   transaction_cost_bps?: number;
   benchmark?: string;
   weights?: WeightConfig;
-}): Promise<LatestBacktestResponse | null> {
+}): Promise<{ ok: boolean; task_id?: string }> {
   const res = await fetch(API_BASE + '/backtest/run', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
