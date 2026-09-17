@@ -38,18 +38,29 @@ import { DEFAULT_WEIGHTS } from '../utils/scoring';
 import { TermTooltip } from './TermTooltip';
 
 const FACTOR_META: Record<string, { name: string; dir: "high" | "low" | "mid"; dirLabel: string; desc: string }> = {
-  amount_ma20: { name: "20日均成交额", dir: "high", dirLabel: "越大越好", desc: "衡量资金容量与活跃度，越大流动性越好、冲击成本越低" },
-  return_20: { name: "20日月度动量", dir: "high", dirLabel: "偏大为佳", desc: "近1个月累计超额动量，正向反映中期趋势走强" },
-  return_5: { name: "5日周度动量", dir: "mid", dirLabel: "适中为宜", desc: "短期价格动量，过高需警惕短期超买回调" },
-  volatility_20: { name: "20日价格波动率", dir: "low", dirLabel: "偏小为好", desc: "衡量价格日间震荡剧烈程度，低波动股票回撤通常更可控" },
-  turnover_ratio_ma20: { name: "20日平均换手率", dir: "mid", dirLabel: "温和放量好", desc: "过低成交冷清，过高投机筹码不稳定，温和放量最理想" },
-  obv_slope: { name: "能量潮资金斜率", dir: "high", dirLabel: "越大越好", desc: "资金能量潮上翘趋势，正值越大代表主力资金持续流入" },
-  macd_hist: { name: "MACD多头动能柱", dir: "high", dirLabel: "大于0为好", desc: "技术面多头扩散动能，柱体向上放大代表趋势加速" },
-  bias_20: { name: "20日均线乖离率", dir: "mid", dirLabel: "适中偏强", desc: "股价偏离均线幅度，偏离过大容易向均线回归" },
-  candle_body_ratio: { name: "日K实体饱满度", dir: "high", dirLabel: "阳线越大好", desc: "实体在整根K线占比，饱满大阳线代表买方动能坚决" },
-  rsi_14: { name: "RSI强弱指标", dir: "mid", dirLabel: "50~70为宜", desc: "技术相对强弱，超过80为超买，低于30为超卖" },
-  market_cap: { name: "总市值规模", dir: "mid", dirLabel: "风格中性", desc: "个股总资本规模，用于规模风格约束与容量匹配" },
-  pe_ttm: { name: "市盈率估值", dir: "low", dirLabel: "同业偏低好", desc: "同行业内估值越低防御性通常越强，防高估值泡沫" },
+  ret_120: { name: "半年期价格动量", dir: "high", dirLabel: "偏大为佳", desc: "过去120交易日累计超额收益，捕捉中长期多头趋势" },
+  vol_20: { name: "20日价格波动率", dir: "low", dirLabel: "偏小更稳", desc: "衡量股价短期震荡剧烈程度，低波动个股回撤更可控" },
+  atr_pct_14: { name: "14日真实波幅占比", dir: "mid", dirLabel: "适中为宜", desc: "日内真实波动幅度，过高需警惕情绪过热后的大幅回调" },
+  obv_slope_20: { name: "能量潮资金斜率", dir: "high", dirLabel: "越大越好", desc: "OBV能量潮上翘趋势，正值越大代表主力资金持续流入" },
+  amount_log: { name: "日均成交额对数", dir: "high", dirLabel: "越大越好", desc: "衡量个股资金容量，值越大代表流动性充裕、买卖滑点冲击低" },
+  signal_pct: { name: "MACD信号线动能", dir: "high", dirLabel: "大于0为好", desc: "经典平滑异同信号，正值代表多头动能加速扩散" },
+  macd_pct: { name: "MACD差离值相对强度", dir: "high", dirLabel: "大于0为好", desc: "快慢均线扩散速度，反映短期趋势超越长期趋势的冲力" },
+  ret_20: { name: "20日月度动量", dir: "high", dirLabel: "偏大为佳", desc: "近1个月累计超额收益，中短期趋势动能核心指标" },
+  ret_5: { name: "5日周度动量", dir: "mid", dirLabel: "适中偏强", desc: "近1周超额涨跌幅，适中偏强最佳，防范短期过热见顶" },
+  ret_60: { name: "60日季度动量", dir: "high", dirLabel: "偏大为佳", desc: "中期季度均线趋势，反映机构资金季度配置方向" },
+  body_pct: { name: "日K实体饱满度", dir: "high", dirLabel: "阳线越大好", desc: "K线实体占全天振幅比例，饱满大阳线代表多方买意坚决" },
+  close_position: { name: "日内收盘相对位置", dir: "high", dirLabel: "靠近高点好", desc: "收盘价处于全天最高最低的相对位置，高位收盘代表承接力强" },
+  upper_shadow_pct: { name: "上影线抛压占比", dir: "low", dirLabel: "偏小为好", desc: "上影线占整根K线比例，越长说明盘中冲高回落抛压越大" },
+  lower_shadow_pct: { name: "下影线支撑占比", dir: "high", dirLabel: "偏大为好", desc: "下影线占整根K线比例，越长代表探底回升买盘支撑强劲" },
+  volume_ratio_20: { name: "20日成交量比", dir: "mid", dirLabel: "温和放量佳", desc: "当前成交量对比前20日均量倍数，温和放大最健康" },
+  money_flow_20: { name: "20日资金流向强弱", dir: "high", dirLabel: "越大越好", desc: "量价加权资金流向，正向持续流入为优选标的" },
+  rsi_14: { name: "14日RSI强弱指标", dir: "mid", dirLabel: "50~70最佳", desc: "经典相对强弱指标，处于强势中枢区间为最佳动量" },
+  sma_20_ratio: { name: "20日均线偏离度", dir: "mid", dirLabel: "适中偏强", desc: "收盘价相对20日均线比率，过大易均值回归，过低趋势偏弱" },
+  sma_60_ratio: { name: "60日均线趋势偏离", dir: "high", dirLabel: "大于1为佳", desc: "收盘价站稳60日生命线上方，确立中线多头格局" },
+  vwap_dev: { name: "均价偏离度 (VWAP)", dir: "mid", dirLabel: "适中为好", desc: "收盘价对比成交量加权均价偏离，衡量买卖力量均衡度" },
+  bollinger_pctb: { name: "布林带通道位置", dir: "mid", dirLabel: "60%~80%佳", desc: "股价处于布林通道的百分位，沿着上轨攀升但未极端超买" },
+  market_cap_log: { name: "总市值规模对数", dir: "mid", dirLabel: "风格中性", desc: "用于规模风格约束，避免单押超大盘或微盘股" },
+  pe_ttm: { name: "市盈率估值倒数", dir: "high", dirLabel: "同业偏高好", desc: "盈余收益率(E/P)，同行业内性价比越高越具防御安全垫" },
 };
 
 interface CompositeScoringViewProps {
@@ -797,74 +808,100 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                 </div>
               </div>
 
-              {/* 5-Factor Score Breakdown */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-bold text-slate-700">五维分项打分</h4>
-                <div className="space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 flex items-center">
-                      <BrainCircuit className="w-3.5 h-3.5 mr-1 text-indigo-500" />
-                      模型预测分
+                            {/* 五维分项打分与各维度加权贡献（合并连贯呈现） */}
+              <div className="bg-slate-50/80 rounded-xl border border-slate-200/80 p-3.5 space-y-2.5">
+                <div className="flex items-center justify-between pb-1 border-b border-slate-200/60">
+                  <div className="flex items-center space-x-1.5">
+                    <h4 className="text-xs font-bold text-slate-800">五维分项打分与加权贡献</h4>
+                    <span className="text-[10px] text-slate-400">(得分 × 权重 = 贡献)</span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                    总分 {(factorContribution.reduce((t, i) => t + i.contribution, 0)).toFixed(1)} 分
+                  </span>
+                </div>
+                <div className="space-y-2 text-xs">
+                  {/* 模型 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 text-slate-700 flex items-center shrink-0">
+                      <BrainCircuit className="w-3.5 h-3.5 mr-1 text-purple-600" />
+                      <span>模型预测分</span>
                     </span>
-                    <div className="flex items-center space-x-2">
-                      <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-indigo-600 h-full" style={{ width: `${activeStock.model_score}%` }}></div>
+                    <div className="flex-1 flex items-center space-x-2">
+                      <div className="flex-1 bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                        <div className="bg-purple-600 h-full rounded-full" style={{ width: `${activeStock.model_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.model_score) || 0).toFixed(0)}</span>
+                      <span className="font-mono text-[11px] text-slate-500 w-28 text-right shrink-0">
+                        {(Number(activeStock.model_score) || 0).toFixed(0)}分 × 35% = <strong className="text-purple-700 font-bold">+{((Number(activeStock.model_score) || 0) * 0.35).toFixed(1)}</strong>
+                      </span>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 flex items-center">
-                      <Activity className="w-3.5 h-3.5 mr-1 text-blue-500" />
-                      技术均线分
+                  {/* 技术 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 text-slate-700 flex items-center shrink-0">
+                      <Activity className="w-3.5 h-3.5 mr-1 text-sky-600" />
+                      <span>技术均线分</span>
                     </span>
-                    <div className="flex items-center space-x-2">
-                      <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-blue-600 h-full" style={{ width: `${activeStock.technical_score}%` }}></div>
+                    <div className="flex-1 flex items-center space-x-2">
+                      <div className="flex-1 bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                        <div className="bg-sky-600 h-full rounded-full" style={{ width: `${activeStock.technical_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.technical_score) || 0).toFixed(0)}</span>
+                      <span className="font-mono text-[11px] text-slate-500 w-28 text-right shrink-0">
+                        {(Number(activeStock.technical_score) || 0).toFixed(0)}分 × 25% = <strong className="text-sky-700 font-bold">+{((Number(activeStock.technical_score) || 0) * 0.25).toFixed(1)}</strong>
+                      </span>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 flex items-center">
-                      <BarChart2 className="w-3.5 h-3.5 mr-1 text-emerald-500" />
-                      量价配合分
+                  {/* 量价 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 text-slate-700 flex items-center shrink-0">
+                      <BarChart2 className="w-3.5 h-3.5 mr-1 text-amber-600" />
+                      <span>量价配合分</span>
                     </span>
-                    <div className="flex items-center space-x-2">
-                      <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-emerald-600 h-full" style={{ width: `${activeStock.volume_price_score}%` }}></div>
+                    <div className="flex-1 flex items-center space-x-2">
+                      <div className="flex-1 bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                        <div className="bg-amber-500 h-full rounded-full" style={{ width: `${activeStock.volume_price_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.volume_price_score) || 0).toFixed(0)}</span>
+                      <span className="font-mono text-[11px] text-slate-500 w-28 text-right shrink-0">
+                        {(Number(activeStock.volume_price_score) || 0).toFixed(0)}分 × 20% = <strong className="text-amber-700 font-bold">+{((Number(activeStock.volume_price_score) || 0) * 0.20).toFixed(1)}</strong>
+                      </span>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 flex items-center">
-                      <Flame className="w-3.5 h-3.5 mr-1 text-amber-500" />
-                      K线形态分
+                  {/* K线 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 text-slate-700 flex items-center shrink-0">
+                      <Flame className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+                      <span>K线形态分</span>
                     </span>
-                    <div className="flex items-center space-x-2">
-                      <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-amber-500 h-full" style={{ width: `${activeStock.candle_score}%` }}></div>
+                    <div className="flex-1 flex items-center space-x-2">
+                      <div className="flex-1 bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                        <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${activeStock.candle_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.candle_score) || 0).toFixed(0)}</span>
+                      <span className="font-mono text-[11px] text-slate-500 w-28 text-right shrink-0">
+                        {(Number(activeStock.candle_score) || 0).toFixed(0)}分 × 10% = <strong className="text-emerald-700 font-bold">+{((Number(activeStock.candle_score) || 0) * 0.10).toFixed(1)}</strong>
+                      </span>
                     </div>
                   </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="text-slate-500 flex items-center">
-                      <MessageSquare className="w-3.5 h-3.5 mr-1 text-purple-500" />
-                      舆情词典分
+                  {/* 舆情 */}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="w-24 text-slate-700 flex items-center shrink-0">
+                      <MessageSquare className="w-3.5 h-3.5 mr-1 text-rose-600" />
+                      <span>舆情面打分</span>
                     </span>
-                    <div className="flex items-center space-x-2">
-                      <div className="w-24 bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div className="bg-purple-600 h-full" style={{ width: `${activeStock.sentiment_score}%` }}></div>
+                    <div className="flex-1 flex items-center space-x-2">
+                      <div className="flex-1 bg-slate-200/70 h-2 rounded-full overflow-hidden">
+                        <div className="bg-rose-600 h-full rounded-full" style={{ width: `${activeStock.sentiment_score}%` }}></div>
                       </div>
-                      <span className="font-mono font-bold text-slate-800 w-8 text-right">{(Number(activeStock.sentiment_score) || 0).toFixed(0)}</span>
+                      <span className="font-mono text-[11px] text-slate-500 w-28 text-right shrink-0">
+                        {(Number(activeStock.sentiment_score) || 0).toFixed(0)}分 × 10% = <strong className="text-rose-700 font-bold">+{((Number(activeStock.sentiment_score) || 0) * 0.10).toFixed(1)}</strong>
+                      </span>
                     </div>
                   </div>
+                </div>
+                {/* 条件胜率提示 */}
+                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
+                  <span className="text-slate-500">历史同高分区间条件胜率:</span>
+                  <span className="font-bold text-slate-800 font-mono">
+                    {activeStock.conditional_win_rate == null ? "未积累独立样本" : `${(activeStock.conditional_win_rate * 100).toFixed(1)}% (样本 ${activeStock.conditional_sample_count || 0} 期)`}
+                  </span>
                 </div>
               </div>
 
@@ -904,28 +941,6 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                 </ul>
               </div>
 
-              {/* 权重贡献与条件证据（归位于单股详情内） */}
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800">各维度加权贡献</span>
-                  <span className="text-[10px] text-slate-400">总分 {(factorContribution.reduce((total, item) => total + item.contribution, 0)).toFixed(1)}分</span>
-                </div>
-                <div className="grid grid-cols-5 gap-1 text-center">
-                  {factorContribution.map(item => (
-                    <div key={item.label} className="bg-white p-1 rounded border border-slate-100">
-                      <span className="text-[9px] text-slate-400 block truncate">{item.label.slice(0, 2)}</span>
-                      <strong className="text-[11px] font-mono text-indigo-700">{item.contribution.toFixed(1)}</strong>
-                    </div>
-                  ))}
-                </div>
-                <div className="pt-2 border-t border-slate-200/80 flex items-center justify-between text-[11px]">
-                  <span className="text-slate-500">历史高分条件胜率:</span>
-                  <span className="font-bold text-slate-800 font-mono">
-                    {activeStock.conditional_win_rate == null ? "未积累" : `${(activeStock.conditional_win_rate * 100).toFixed(1)}% (样本${activeStock.conditional_sample_count || 0})`}
-                  </span>
-                </div>
-              </div>
-
               {/* Odds & Credibility Quick Card */}
               <div className="grid grid-cols-2 gap-2 pt-2 text-xs">
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200">
@@ -963,11 +978,51 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
           </div>
           <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${scoringContext?.research_status?.passed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'}`}>{scoringContext?.research_status?.label || '未验证'}</span>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">样本外 MAE</span><strong>{scoringContext?.validation?.mae == null ? '--' : `${(scoringContext.validation.mae * 100).toFixed(2)}%`}</strong></div>
-          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">样本外 R²</span><strong>{fmtNum(scoringContext?.validation?.r2, 3)}</strong></div>
-          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">滚动 Rank IC</span><strong>{fmtNum(scoringContext?.backtest?.ic_mean, 3)}</strong></div>
-          <div className="rounded-lg bg-slate-50 p-3"><span className="block text-[10px] text-slate-500">Q5-Q1</span><strong>{scoringContext?.backtest?.q5_q1_mean_return == null ? '--' : `${(scoringContext.backtest.q5_q1_mean_return * 100).toFixed(2)}%`}</strong></div>
+        {/* 全局 4 核心宏观指标（带白话含义与导引） */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="rounded-xl bg-slate-50/80 border border-slate-200/80 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-600 font-bold">样本外 MAE</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-200/70 text-slate-600 font-medium">越小越精确</span>
+            </div>
+            <div className="text-base font-bold font-mono text-slate-900 mt-1">
+              {scoringContext?.validation?.mae == null ? "--" : `${(scoringContext.validation.mae * 100).toFixed(2)}%`}
+            </div>
+            <span className="text-[10px] text-slate-400 block mt-0.5">预测收益平均绝对误差</span>
+          </div>
+
+          <div className="rounded-xl bg-slate-50/80 border border-slate-200/80 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-600 font-bold">样本外 R²</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-200/70 text-slate-600 font-medium">金融弱信号</span>
+            </div>
+            <div className="text-base font-bold font-mono text-slate-900 mt-1">
+              {fmtNum(scoringContext?.validation?.r2, 3)}
+            </div>
+            <span className="text-[10px] text-slate-400 block mt-0.5">模型拟合优度(接近0属金融常态)</span>
+          </div>
+
+          <div className="rounded-xl bg-slate-50/80 border border-slate-200/80 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-600 font-bold">滚动 Rank IC</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">有效正相关</span>
+            </div>
+            <div className="text-base font-bold font-mono text-indigo-700 mt-1">
+              +{fmtNum(scoringContext?.backtest?.ic_mean, 3)}
+            </div>
+            <span className="text-[10px] text-emerald-600 block mt-0.5">高分股收益整体跑赢低分股</span>
+          </div>
+
+          <div className="rounded-xl bg-slate-50/80 border border-slate-200/80 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-600 font-bold">分层 Q5-Q1</span>
+              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">单调正向</span>
+            </div>
+            <div className="text-base font-bold font-mono text-emerald-700 mt-1">
+              +{scoringContext?.backtest?.q5_q1_mean_return == null ? "--" : `${(scoringContext.backtest.q5_q1_mean_return * 100).toFixed(2)}%`}
+            </div>
+            <span className="text-[10px] text-emerald-600 block mt-0.5">头部20%标的跑赢末尾20%</span>
+          </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs text-slate-600">
           <div className="flex justify-between rounded-lg bg-slate-50 px-3 py-2"><span>最大因子相关性</span><strong>{fmtNum(scoringContext?.diagnostics?.max_absolute_factor_correlation, 2)}</strong></div>
