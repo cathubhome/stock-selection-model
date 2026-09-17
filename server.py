@@ -1208,12 +1208,10 @@ def get_latest_backtest() -> Dict[str, Any]:
 def _background_backtest(task_id: str, payload: BacktestRunRequest) -> None:
     symbols = _pool_symbols()
     if not symbols:
-        with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'error': '股票池为空', 'message': '回测失败：股票池为空'}
+        _store_task_status(task_id, {'running': False, 'percent': 0.0, 'error': '股票池为空', 'message': '回测失败：股票池为空'})
         return
     try:
-        with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': True, 'percent': 5.0, 'message': '正在构建技术与量价特征...', 'current': 0, 'total': 0, 'error': None}
+        _store_task_status(task_id, {'running': True, 'percent': 5.0, 'message': '正在构建技术与量价因子特征...', 'current': 0, 'total': 0, 'error': None})
         panel = _load_pool_panel(symbols)
         frame, features = build_features(panel, horizon=payload.horizon)
         weights_dict = payload.weights.model_dump() if payload.weights else DEFAULT_WEIGHTS
@@ -1230,12 +1228,11 @@ def _background_backtest(task_id: str, payload: BacktestRunRequest) -> None:
         def bt_progress(idx: int, total: int, dt: pd.Timestamp):
             pct = round(idx / max(1, total) * 100, 1)
             date_str = str(dt.date())
-            with _TASK_LOCK:
-                _TASK_STATUS[task_id] = {
-                    'running': True, 'current': idx, 'total': total,
-                    'percent': pct, 'message': f'正在滚动推演第 [{idx}/{total}] 期调仓 ({date_str})...',
-                    'date': date_str, 'error': None
-                }
+            _store_task_status(task_id, {
+                'running': True, 'current': idx, 'total': total,
+                'percent': pct, 'message': f'正在滚动推演第 [{idx}/{total}] 期调仓 ({date_str})...',
+                'date': date_str, 'error': None
+            })
 
         periods_df, metrics = run_walk_forward_backtest(
             frame=frame,
@@ -1253,19 +1250,16 @@ def _background_backtest(task_id: str, payload: BacktestRunRequest) -> None:
         (OUTPUT_DIR / 'backtest_metrics.json').write_text(
             json.dumps(metrics, ensure_ascii=False, indent=2), encoding='utf-8'
         )
-        with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {
-                'running': False, 'percent': 100.0, 'current': len(periods_df), 'total': len(periods_df),
-                'message': f'回测已完成，共推演 {len(periods_df)} 期样本外调仓', 'error': None
-            }
+        _store_task_status(task_id, {
+            'running': False, 'percent': 100.0, 'current': len(periods_df), 'total': len(periods_df),
+            'message': f'回测已完成，共推演 {len(periods_df)} 期样本外调仓', 'error': None
+        })
     except Exception as exc:
-        with _TASK_LOCK:
-            _TASK_STATUS[task_id] = {'running': False, 'percent': 0.0, 'error': str(exc), 'message': f'回测运行失败: {exc}'}
+        _store_task_status(task_id, {'running': False, 'percent': 0.0, 'error': str(exc), 'message': f'回测运行失败: {exc}'})
 
 @app.get('/api/backtest/run-progress')
 def get_backtest_progress(task_id: str = Query(...)) -> Dict[str, Any]:
-    with _TASK_LOCK:
-        status = _TASK_STATUS.get(task_id)
+    status = _read_task_status(task_id)
     if not status:
         return {'running': False, 'percent': 100.0, 'message': '未找到回测任务或任务已结束', 'error': None}
     return status

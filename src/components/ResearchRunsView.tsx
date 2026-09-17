@@ -43,15 +43,35 @@ const KNOWN_STOCK_NAMES: Record<string, { name: string; industry: string }> = {
 interface ResearchRunsViewProps {
   runs?: ArchiveRun[];
   stocks?: ScoredStock[];
+  onNavigate?: (step: any) => void;
 }
 
 export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
-  runs = ARCHIVE_RESEARCH_RUNS,
+  runs = [],
   stocks = [],
+  onNavigate,
 }) => {
+  const [diffLimit, setDiffLimit] = useState<number>(5);
+  const [applyConfigMsg, setApplyConfigMsg] = useState<string | null>(null);
   const [selectedLeftRunId, setSelectedLeftRunId] = useState<string>(runs[0]?.run_id || '');
   const [activeRunDetail, setActiveRunDetail] = useState<{ run_id: string; manifest: any; picks: any[] } | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+
+  const handleApplyRunConfig = (manifest: any) => {
+    if (!manifest?.config) return;
+    try {
+      if (manifest.config.weights) {
+        localStorage.setItem("a_share_stock_model_weights_v2", JSON.stringify(manifest.config.weights));
+      }
+      setApplyConfigMsg("已将该实验参数 (周期、TopK及权重) 载入本地配置！");
+      setTimeout(() => {
+        setApplyConfigMsg(null);
+        if (onNavigate) onNavigate("综合评分");
+      }, 1200);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   const handleOpenDetail = async (runId: string) => {
     setIsLoadingDetail(true);
@@ -103,9 +123,12 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
   const leftRun = runs.find(r => r.run_id === selectedLeftRunId) || runs[0];
   const rightRun = runs.find(r => r.run_id === selectedRightRunId) || runs[2] || runs[0];
 
-  // Compare candidates between Left and Right
-  const leftSymbols = leftRun?.top_symbols || [];
-  const rightSymbols = rightRun?.top_symbols || [];
+  // Compare candidates between Left and Right with dynamic limit
+  const leftSymbols = (leftRun?.top_symbols || []).slice(0, diffLimit === 0 ? undefined : diffLimit);
+  const rightSymbols = (rightRun?.top_symbols || []).slice(0, diffLimit === 0 ? undefined : diffLimit);
+
+  const leftAvg = leftRun?.avg_score || (leftRun?.excess_return != null ? `+${leftRun.excess_return}%` : "--");
+  const rightAvg = rightRun?.avg_score || (rightRun?.excess_return != null ? `+${rightRun.excess_return}%` : "--");
 
   const newlyAdded = leftSymbols.filter(s => !rightSymbols.includes(s));
   const dropped = rightSymbols.filter(s => !leftSymbols.includes(s));
@@ -219,13 +242,29 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
 
       {/* Runs Difference Comparator */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div>
-            <h3 className="text-sm font-bold text-slate-900">
-              跨实验候选标的对比分析 (Candidate Diff Comparator)
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              对比不同日期或不同参数运行下，Top 5 优选标的名称、代码、行业及进出流动性
+            <div className="flex items-center space-x-2">
+              <h3 className="text-sm font-bold text-slate-900">
+                跨实验候选标的与量化效能对比
+              </h3>
+              <div className="flex items-center space-x-1 bg-slate-100 p-0.5 rounded-lg text-[10px]">
+                {[5, 10, 0].map((lim) => (
+                  <button
+                    key={lim}
+                    type="button"
+                    onClick={() => setDiffLimit(lim)}
+                    className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
+                      diffLimit === lim ? "bg-white text-indigo-700 shadow-2xs font-bold" : "text-slate-500 hover:text-slate-800"
+                    }`}
+                  >
+                    {lim === 0 ? "全部候选" : `Top ${lim}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              横向对比两个独立实验的参数配置、综合收益表现、重合率及选股流动性
             </p>
           </div>
 
@@ -261,6 +300,34 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
                 ))}
               </select>
             </div>
+          </div>
+        </div>
+
+        {/* Macro Metric Side-by-Side Comparison */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-white p-3 rounded-xl border border-slate-200">
+          <div className="p-2 bg-slate-50 rounded-lg">
+            <span className="text-[10px] text-slate-400 block">实验 A 截面表现</span>
+            <strong className="text-slate-900 text-sm font-mono mt-0.5 block">{leftAvg}</strong>
+            <span className="text-[10px] text-slate-500 truncate block">{leftRun?.date} · {leftRun?.kind === "score" ? "综合评分" : "前向回测"}</span>
+          </div>
+          <div className="p-2 bg-slate-50 rounded-lg">
+            <span className="text-[10px] text-slate-400 block">实验 B 截面表现</span>
+            <strong className="text-slate-900 text-sm font-mono mt-0.5 block">{rightAvg}</strong>
+            <span className="text-[10px] text-slate-500 truncate block">{rightRun?.date} · {rightRun?.kind === "score" ? "综合评分" : "前向回测"}</span>
+          </div>
+          <div className="p-2 bg-slate-50 rounded-lg">
+            <span className="text-[10px] text-slate-400 block">标的重合度</span>
+            <strong className="text-indigo-700 text-sm font-mono mt-0.5 block">
+              {leftSymbols.length > 0 ? `${((preserved.length / leftSymbols.length) * 100).toFixed(0)}%` : "0%"}
+            </strong>
+            <span className="text-[10px] text-slate-500 block">两期共有 {preserved.length} 只标的</span>
+          </div>
+          <div className="p-2 bg-slate-50 rounded-lg">
+            <span className="text-[10px] text-slate-400 block">名单置换比例</span>
+            <strong className="text-amber-700 text-sm font-mono mt-0.5 block">
+              {leftSymbols.length > 0 ? `${((newlyAdded.length / leftSymbols.length) * 100).toFixed(0)}%` : "0%"}
+            </strong>
+            <span className="text-[10px] text-slate-500 block">新进 {newlyAdded.length} 只 / 跌出 {dropped.length} 只</span>
           </div>
         </div>
 
@@ -557,6 +624,30 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
                   </div>
                 </div>
               )}
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                <span className="text-xs text-emerald-600 font-medium">
+                  {applyConfigMsg || ""}
+                </span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveRunDetail(null)}
+                    className="px-3.5 py-1.5 rounded-lg text-xs text-slate-600 hover:bg-slate-100"
+                  >
+                    关闭
+                  </button>
+                  {activeRunDetail.manifest?.config && (
+                    <button
+                      type="button"
+                      onClick={() => handleApplyRunConfig(activeRunDetail.manifest)}
+                      className="inline-flex items-center px-4 py-1.5 rounded-lg text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs cursor-pointer"
+                    >
+                      <Sliders className="w-3.5 h-3.5 mr-1" />
+                      一键复现此实验参数并前往评分
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

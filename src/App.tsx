@@ -293,7 +293,8 @@ export const App: React.FC = () => {
         {currentStep === '研究记录' && (
           <ResearchRunsView
             runs={researchRuns}
-            stocks={stocks}
+            stocks={poolStocks}
+            onNavigate={setCurrentStep}
           />
         )}
       </main>
