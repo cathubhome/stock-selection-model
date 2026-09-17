@@ -698,10 +698,25 @@ def _background_download(task_id: str, symbols: List[str], mode: str, start_date
     } if not universe.empty else {}
 
     def progress_cb(current: int, total: int, symbol: str, note: str) -> None:
+        import re
+        ok = None
+        rows = 0
+        err = ""
+        if "失败" in note:
+            ok = False
+            err = note
+        elif "已最新" in note or "已更新至" in note or "无新增" in note:
+            ok = True
+            rows = 0
+        elif "完成" in note:
+            ok = True
+            m = re.search(r"新增\s*(\d+)\s*行", note)
+            rows = int(m.group(1)) if m else 1
+
         with _TASK_LOCK:
             status = _TASK_STATUS.get(task_id, {})
             details = [item for item in status.get('details', []) if item.get('symbol') != symbol]
-            details.append({'symbol': symbol, 'name': name_map.get(symbol, symbol), 'ok': None, 'rows': None, 'start': '', 'end': '', 'source': '', 'error': '', 'note': note})
+            details.append({'symbol': symbol, 'name': name_map.get(symbol, symbol), 'ok': ok, 'rows': rows, 'start': '', 'end': '', 'source': '', 'error': err, 'note': note})
             _TASK_STATUS[task_id] = {'running': True, 'current': current, 'total': total, 'percent': round(current / max(1, total) * 100, 1), 'symbol': symbol, 'message': f'[{current}/{total}] {name_map.get(symbol, symbol)} ({symbol}) - {note}', 'error': None, 'details': details}
 
     try:

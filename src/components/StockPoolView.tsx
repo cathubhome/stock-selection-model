@@ -470,10 +470,10 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
               <button
                 type="button"
                 onClick={() => setShowLogDrawer(prev => !prev)}
-                className="inline-flex items-center text-xs font-medium text-slate-600 hover:text-indigo-600 transition-colors px-2.5 py-1 rounded border border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"
+                className="inline-flex items-center text-xs font-medium text-slate-500 hover:text-indigo-600 hover:bg-slate-100/80 transition-all px-2.5 py-1 rounded-full cursor-pointer"
               >
-                <span>{showLogDrawer ? "收起底层日志" : `查看底层明细日志 (${downloadDetails.length})`}</span>
-                {showLogDrawer ? <ChevronUp className="w-3.5 h-3.5 ml-1" /> : <ChevronDown className="w-3.5 h-3.5 ml-1" />}
+                <span>{showLogDrawer ? "收起明细" : `查看逐股记录 (${downloadDetails.length})`}</span>
+                <ChevronDown className={`w-3.5 h-3.5 ml-1 transition-transform duration-200 ${showLogDrawer ? "rotate-180" : ""}`} />
               </button>
             </div>
           </div>
@@ -561,7 +561,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
           <div className="flex items-center space-x-2">
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">数据质量体检诊断 (Data Quality Audit)</h4>
+            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">数据质量体检诊断</h4>
           </div>
           <div className="flex items-center space-x-2">
             <span className="text-[11px] text-slate-500">最新数据: {marketData?.latest_date || '--'}</span>
