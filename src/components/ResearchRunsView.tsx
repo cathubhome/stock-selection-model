@@ -84,7 +84,22 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
       setIsLoadingDetail(false);
     }
   };
-  const [selectedRightRunId, setSelectedRightRunId] = useState<string>(runs[2]?.run_id || '');
+  const [selectedRightRunId, setSelectedRightRunId] = useState<string>(runs[1]?.run_id || runs[0]?.run_id || "");
+  const [diffKind, setDiffKind] = useState<"all" | "score" | "backtest">("score");
+
+  // 异步数据载入后自动握手选中最新两期实验
+  React.useEffect(() => {
+    if (runs.length > 0) {
+      const scoreRuns = runs.filter(r => r.kind === "score");
+      const defaultPool = scoreRuns.length >= 2 ? scoreRuns : runs;
+      if (!selectedLeftRunId || !runs.some(r => r.run_id === selectedLeftRunId)) {
+        setSelectedLeftRunId(defaultPool[0].run_id);
+      }
+      if (!selectedRightRunId || !runs.some(r => r.run_id === selectedRightRunId)) {
+        setSelectedRightRunId(defaultPool.length > 1 ? defaultPool[1].run_id : defaultPool[0].run_id);
+      }
+    }
+  }, [runs]);
 
   // Fast lookup map for symbol -> { name, industry }
   const stockMetaMap = useMemo(() => {
@@ -269,36 +284,38 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
-            <div className="flex items-center space-x-1.5">
-              <span className="text-xs text-slate-500 font-medium">基准实验 A:</span>
-              <select
-                value={selectedLeftRunId}
-                onChange={(e) => setSelectedLeftRunId(e.target.value)}
-                className="text-xs rounded-lg border border-slate-300 p-1.5 bg-white text-slate-800 font-mono focus:ring-1 focus:ring-indigo-500 outline-hidden"
-              >
-                {runs.map(r => (
-                  <option key={r.run_id} value={r.run_id}>
-                    {r.date} · {r.kind === 'score' ? '评分' : '回测'} ({r.run_id.slice(-8)})
-                  </option>
-                ))}
-              </select>
-            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center space-x-1.5">
+                <span className="text-xs text-slate-600 font-bold">实验 A (最新基准):</span>
+                <select
+                  value={selectedLeftRunId}
+                  onChange={(e) => setSelectedLeftRunId(e.target.value)}
+                  className="text-xs rounded-lg border border-slate-300 py-1.5 px-2 bg-white text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                >
+                  {runs.map(r => (
+                    <option key={r.run_id} value={r.run_id}>
+                      {r.date} · {r.kind === "score" ? "综合评分" : "前向回测"} ({r.run_id.slice(-8)})
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <span className="text-xs text-indigo-600 font-bold px-1">VS</span>
+              <span className="text-xs text-indigo-600 font-black px-1">VS</span>
 
-            <div className="flex items-center space-x-1.5">
-              <span className="text-xs text-slate-500 font-medium">对比实验 B:</span>
-              <select
-                value={selectedRightRunId}
-                onChange={(e) => setSelectedRightRunId(e.target.value)}
-                className="text-xs rounded-lg border border-slate-300 p-1.5 bg-white text-slate-800 font-mono focus:ring-1 focus:ring-indigo-500 outline-hidden"
-              >
-                {runs.map(r => (
-                  <option key={r.run_id} value={r.run_id}>
-                    {r.date} · {r.kind === 'score' ? '评分' : '回测'} ({r.run_id.slice(-8)})
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center space-x-1.5">
+                <span className="text-xs text-slate-600 font-bold">实验 B (对比样本):</span>
+                <select
+                  value={selectedRightRunId}
+                  onChange={(e) => setSelectedRightRunId(e.target.value)}
+                  className="text-xs rounded-lg border border-slate-300 py-1.5 px-2 bg-white text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
+                >
+                  {runs.map(r => (
+                    <option key={r.run_id} value={r.run_id}>
+                      {r.date} · {r.kind === "score" ? "综合评分" : "前向回测"} ({r.run_id.slice(-8)})
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         </div>

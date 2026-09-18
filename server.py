@@ -1524,35 +1524,30 @@ def list_research_runs() -> List[Dict[str, Any]]:
         for f in sorted(runs_dir.glob('*.json'), reverse=True):
             try:
                 data = json.loads(f.read_text(encoding='utf-8'))
+                candidates = data.get('candidate_snapshot') or data.get('picks') or []
+                symbols = [str(p.get('symbol')).zfill(6) for p in candidates if p.get('symbol')]
+                scores = [safe_float(p.get('composite_score')) for p in candidates if p.get('composite_score') is not None]
+                avg_score = round(sum(scores) / len(scores), 1) if scores else round(data.get('diagnostics', {}).get('average_score', 50.0), 1)
+
+                summary = data.get('metrics_summary') or data.get('backtest') or {}
+                excess_ret = summary.get('cumulative_excess_return') if summary.get('cumulative_excess_return') is not None else summary.get('excess_cumulative_return')
+                excess_val = round(safe_float(excess_ret) * 100, 2) if excess_ret is not None else None
+                sharpe_val = round(safe_float(summary.get('sharpe')), 2) if summary.get('sharpe') is not None else None
+
                 runs.append({
                     'run_id': data.get('run_id', f.stem),
-                    'date': data.get('created_at', '')[:10],
+                    'date': str(data.get('data_end') or data.get('created_at', '')[:10]),
                     'created_at': data.get('created_at', '').replace('T', ' ')[:19],
                     'kind': data.get('kind', 'score'),
-                    'stock_count': len(data.get('picks', [])),
-                    'top_symbols': [p.get('symbol') for p in data.get('picks', [])][:5],
-                    'avg_score': round(data.get('diagnostics', {}).get('average_score', 50.0), 1),
-                    'excess_return': data.get('backtest', {}).get('excess_cumulative_return'),
-                    'sharpe': data.get('backtest', {}).get('sharpe'),
+                    'stock_count': len(candidates) or int(data.get('config', {}).get('top_k', 10)),
+                    'top_symbols': symbols[:10],
+                    'avg_score': avg_score,
+                    'excess_return': excess_val,
+                    'sharpe': sharpe_val,
+                    'config': data.get('config', {}),
                 })
             except Exception:
                 continue
-
-    if not runs and (OUTPUT_DIR / 'latest_score_manifest.json').exists():
-        try:
-            m = json.loads((OUTPUT_DIR / 'latest_score_manifest.json').read_text(encoding='utf-8'))
-            runs.append({
-                'run_id': m.get('run_id'),
-                'date': m.get('created_at', '')[:10],
-                'created_at': m.get('created_at', '').replace('T', ' ')[:19],
-                'kind': 'score',
-                'stock_count': len(m.get('picks', [])),
-                'top_symbols': [p.get('symbol') for p in m.get('picks', [])][:5],
-                'avg_score': 50.0,
-            })
-        except Exception:
-            pass
-
     return runs
 
 
