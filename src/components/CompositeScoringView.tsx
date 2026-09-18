@@ -795,7 +795,7 @@ export const CompositeScoringView: React.FC<CompositeScoringViewProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-1">
-                    最新价 {activeStock.price == null ? "--" : `¥${fmtNum(activeStock.price, 2)}`} · 换手率 {activeStock.turnover == null ? "--" : `${fmtNum(activeStock.turnover, 2)}%`} · PE {fmtNum(activeStock.pe_ttm, 1)}
+                    最新价 {activeStock.price == null ? "--" : `¥${fmtNum(activeStock.price, 2)}`} · 换手率 {activeStock.turnover == null ? "--" : `${fmtNum(activeStock.turnover, 2)}%`} · PE {activeStock.pe_ttm == null ? "--" : activeStock.pe_ttm < 0 ? `亏损 (${fmtNum(activeStock.pe_ttm, 1)})` : fmtNum(activeStock.pe_ttm, 1)}
                   </p>
                 </div>
 

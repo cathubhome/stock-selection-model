@@ -38,7 +38,7 @@ def assess_research_status(
         ("robust_sample", int(bt.get("periods", 0)) >= 60, "稳健通过至少需要60个非重叠样本外调仓期"),
         ("simple_baselines", float(bt.get("best_simple_baseline_excess_return", -1)) > 0,
          "组合应跑赢仅模型评分、20日动量、60日动量和低波动基线"),
-        ("ic_significance", float(bt.get("ic_p_value_adjusted", bt.get("ic_p_value", 1))) < 0.05,
+        ("ic_significance", float(bt.get("ic_p_value_adjusted", bt.get("ic_p_value", 1.0))) < 0.05,
          "Rank IC 经多重检验校正后的 p 值应低于0.05"),
         ("holding_valuation", int(bt.get("unresolved_holding_events", 0)) == 0,
          "跌停、停牌或退市持仓必须具有可连续估值的后续行情"),

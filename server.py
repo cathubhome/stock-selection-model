@@ -188,13 +188,47 @@ def _latest_market_values(symbol: str) -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        history = pd.read_parquet(path).sort_values('date').tail(2)
-        if history.empty:
+        df = pd.read_parquet(path).sort_values('date')
+        if df.empty:
             return {}
-        latest = history.iloc[-1]
-        previous_close = safe_float(history.iloc[-2].get('close')) if len(history) > 1 else 0.0
+        latest = df.iloc[-1]
+        history = df.tail(2)
+
+        # Prioritize reading 涨跌幅 (change percent) from parquet
+        change = None
+        if '涨跌幅' in latest and pd.notna(latest['涨跌幅']):
+            change = safe_float(latest['涨跌幅'])
+
+        # Fallback to reading from previous day if latest 涨跌幅 is empty
+        if change is None and len(history) >= 2:
+            prev_row = history.iloc[-2]
+            if '涨跌幅' in prev_row and pd.notna(prev_row['涨跌幅']):
+                change = safe_float(prev_row['涨跌幅'])
+
+        # Fallback to computing from close price if still no valid 涨跌幅
+        if change is None:
+            if len(history) >= 2:
+                previous_close = safe_float(history.iloc[-2].get('close'))
+                close_val = safe_float(latest.get('close'))
+                change = ((close_val / previous_close) - 1.0) * 100.0 if previous_close else 0.0
+            else:
+                change = 0.0
+
+        # Clamp change to realistic A-share limits (-21% to +21%)
+        change = max(-21.0, min(21.0, round(change, 2))) if change is not None else 0.0
+
         close = safe_float(latest.get('close'))
-        change = ((close / previous_close) - 1.0) * 100.0 if previous_close else 0.0
+        raw_turnover = safe_float(latest.get('turnover'))
+        turnover = round(raw_turnover * 100.0, 2) if 0 < raw_turnover < 0.5 else round(raw_turnover, 2)
+        return {
+            'price': round(close, 2),
+            'change': round(change, 2),
+            'turnover': turnover,
+            'amount': safe_float(latest.get('amount')),
+            'market_date': pd.Timestamp(latest['date']).strftime('%Y-%m-%d'),
+        }
+
+        close = safe_float(latest.get('close'))
         return {
             'price': round(close, 2),
             'change': round(change, 2),
@@ -534,11 +568,30 @@ def get_stock_pool() -> List[Dict[str, Any]]:
             change_val = safe_float(s_info.get('daily_return')) * 100.0
         change = market_info.get('change', round(safe_float(change_val, 0.0), 2))
         turnover = market_info.get('turnover', round(safe_float(s_info.get('turnover')), 2))
+        if turnover is not None and turnover < 0.5:
+            turnover = round(turnover * 100, 2)
         pool_ind = str(row.get('industry') or '').strip()
         score_ind = str(s_info.get('industry') or '').strip()
         u_ind = str(u_info.get('industry') or '').strip()
         raw_ind = pool_ind or score_ind or u_ind or '综合'
         industry = _normalize_to_sw_l1(raw_ind) or '综合'
+
+        # Get pe_ttm and pb with fallback logic
+        pe_ttm_val = None
+        pb_val = None
+
+        # Try to get from latest_scores.csv first
+        if s_info:
+            pe_ttm_val = optional_float(s_info.get('pe_ttm'))
+            pb_val = optional_float(s_info.get('pb'))
+
+        # Fall back to _get_security_quote_meta if not available in scores
+        if (pe_ttm_val is None or pb_val is None) and sym:
+            quote_meta = _get_security_quote_meta(sym)
+            if pe_ttm_val is None and quote_meta.get('pe_ttm') is not None:
+                pe_ttm_val = optional_float(quote_meta.get('pe_ttm'))
+            if pb_val is None and quote_meta.get('pb') is not None:
+                pb_val = optional_float(quote_meta.get('pb'))
 
         result.append({
             'symbol': sym,
@@ -553,6 +606,8 @@ def get_stock_pool() -> List[Dict[str, Any]]:
             'turnover': turnover,
             'amount': market_info.get('amount', safe_float(s_info.get('amount'))),
             'market_date': market_info.get('market_date'),
+            'pe_ttm': pe_ttm_val,
+            'pb': pb_val,
             'composite_score': round(safe_float(s_info.get('composite_score'), 50.0), 1),
             'model_score': round(safe_float(s_info.get('model_score'), 50.0), 1),
             'technical_score': round(safe_float(s_info.get('technical_score'), 50.0), 1),

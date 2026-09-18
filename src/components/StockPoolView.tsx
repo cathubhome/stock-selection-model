@@ -656,7 +656,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                 <th className="py-3 px-4">代码 / 简称</th>
                 <th className="py-3 px-4">行业分类</th>
                 <th className="py-3 px-4">板块</th>
-                <th className="py-3 px-4">最新收盘价</th>
+                <th className="py-3 px-4">最新价 (后复权)</th>
                 <th className="py-3 px-4">日涨跌幅</th>
                 <th className="py-3 px-4">换手率</th>
                 <th className="py-3 px-4">成交额</th>
@@ -704,7 +704,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                       {((Number(stock.amount) || 0) / 100000000).toFixed(2)} 亿
                     </td>
                     <td className="py-3 px-4 text-slate-700">
-                      {stock.pe_ttm != null ? Number(stock.pe_ttm).toFixed(1) : '--'}
+                      {stock.pe_ttm != null ? (stock.pe_ttm < 0 ? `亏损 (${Number(stock.pe_ttm).toFixed(1)})` : Number(stock.pe_ttm).toFixed(1)) : '--'}
                     </td>
                     <td className="py-3 px-4 text-slate-500 text-[11px]">
                       {stock.source || '历史对话提取'}
