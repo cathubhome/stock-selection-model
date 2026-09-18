@@ -20,7 +20,9 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
-  Sliders
+  Sliders,
+  X,
+  Sparkles
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -68,6 +70,7 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
   const [backtestError, setBacktestError] = useState<string | null>(null);
   const [periodPage, setPeriodPage] = useState<number>(1);
   const periodPageSize = 15;
+  const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
 
   useEffect(() => {
     fetchGovernanceStatus().then(res => {
@@ -255,14 +258,34 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
           </div>
 
           <div className="flex items-center gap-2 self-start md:self-center">
-            <button
-              onClick={handleRerun}
-              disabled={isRecalculating}
-              className="inline-flex items-center px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs shadow-md transition-all whitespace-nowrap cursor-pointer"
-            >
-              <Play className={`w-3.5 h-3.5 mr-1.5 fill-current ${isRecalculating ? 'animate-pulse' : ''}`} />
-              <span>{isRecalculating ? '计算中...' : '重新运行回测'}</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => (isRecalculating ? null : setShowConfirmModal(true))}
+                disabled={isRecalculating}
+                className={`inline-flex items-center px-4 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all whitespace-nowrap cursor-pointer ${
+                  isRecalculating
+                    ? "bg-purple-700/80 text-purple-100 cursor-not-allowed"
+                    : "bg-purple-600 hover:bg-purple-500 text-white"
+                }`}
+              >
+                {isRecalculating ? (
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin text-purple-200" />
+                ) : (
+                  <Play className="w-3.5 h-3.5 mr-1.5 fill-current" />
+                )}
+                <span>
+                  {isRecalculating
+                    ? `推演进行中 (${Math.round(backtestProgress?.percent || 15)}%)...`
+                    : "运行前向滚动回测"}
+                </span>
+              </button>
+              {isRecalculating && (
+                <span className="hidden sm:inline-flex items-center px-2.5 py-1.5 rounded-xl bg-white/10 text-[11px] text-purple-200 border border-white/10">
+                  <Sparkles className="w-3 h-3 mr-1 text-amber-300" />
+                  后台推演中 · 可自由切换页面
+                </span>
+              )}
+            </div>
 
             <button
               onClick={downloadBacktestCsv}
@@ -713,6 +736,86 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* 前向滚动回测任务规格前置确认卡 (方案 A+B 落地) */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
+                  <ChartIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">前向滚动回测任务规格确认</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">严格遵循去未来函数设计，扣除全额交易摩擦</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConfirmModal(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* 规格清单 */}
+            <div className="py-4 space-y-2.5 text-xs text-slate-600">
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <span className="text-slate-500">回测标的池范围</span>
+                <strong className="text-slate-900 font-mono">当前本地股票池 {stocks.length} 只 A 股</strong>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <span className="text-slate-500">滚动调仓周期与持仓</span>
+                <strong className="text-slate-900 font-mono">每 {config.horizon} 交易日调仓 · 目标精选 Top {config.top_k}</strong>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <span className="text-slate-500">交易摩擦成本假设</span>
+                <strong className="text-slate-900 font-mono">万5印花税 + 双边万2.5佣金 + {config.transaction_cost_bps}bps滑点</strong>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <span className="text-slate-500">策略业绩对比基准</span>
+                <strong className="text-indigo-700 font-mono">{config.benchmark}</strong>
+              </div>
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-purple-50/60 border border-purple-100/80">
+                <span className="text-purple-700 font-medium">样本外任务量与预估</span>
+                <strong className="text-purple-900 font-mono">预计推演 {metrics.periods || 36} 期滚动训练 · 约 35 秒</strong>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-[11px] text-slate-500 space-y-1">
+              <div className="flex items-center space-x-1 text-slate-700 font-semibold">
+                <Info className="w-3.5 h-3.5 text-indigo-600" />
+                <span>后台异步执行提示：</span>
+              </div>
+              <p className="leading-relaxed">
+                启动后任务将在后台异步队列中持续推演。期间您可自由切换至【研究看板】或【综合评分】继续其他工作，进度实时同步，推演完成后自动刷新净值。
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirmModal(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                返回检查
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConfirmModal(false);
+                  handleRerun();
+                }}
+                className="px-5 py-2 rounded-xl text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white shadow-md transition-all cursor-pointer"
+              >
+                确认并启动后台推演
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
