@@ -51,55 +51,31 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
   stocks = [],
   onNavigate,
 }) => {
+  const [diffMode, setDiffMode] = useState<"score" | "backtest">("score");
   const [diffLimit, setDiffLimit] = useState<number>(5);
+  const [runsPage, setRunsPage] = useState<number>(1);
+  const runsPageSize = 10;
   const [applyConfigMsg, setApplyConfigMsg] = useState<string | null>(null);
-  const [selectedLeftRunId, setSelectedLeftRunId] = useState<string>(runs[0]?.run_id || '');
+  const [selectedLeftRunId, setSelectedLeftRunId] = useState<string>("");
+  const [selectedRightRunId, setSelectedRightRunId] = useState<string>("");
   const [activeRunDetail, setActiveRunDetail] = useState<{ run_id: string; manifest: any; picks: any[] } | null>(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
 
-  const handleApplyRunConfig = (manifest: any) => {
-    if (!manifest?.config) return;
-    try {
-      if (manifest.config.weights) {
-        localStorage.setItem("a_share_stock_model_weights_v2", JSON.stringify(manifest.config.weights));
-      }
-      setApplyConfigMsg("已将该实验参数 (周期、TopK及权重) 载入本地配置！");
-      setTimeout(() => {
-        setApplyConfigMsg(null);
-        if (onNavigate) onNavigate("综合评分");
-      }, 1200);
-    } catch (e) {
-      console.error(e);
-    }
-  };
+  // 过滤同类型实验
+  const modeFilteredRuns = useMemo(() => {
+    return runs.filter(r => r.kind === diffMode);
+  }, [runs, diffMode]);
 
-  const handleOpenDetail = async (runId: string) => {
-    setIsLoadingDetail(true);
-    try {
-      const res = await fetchRunDetail(runId);
-      if (res) setActiveRunDetail(res);
-    } catch (err) {
-      console.error('Failed to fetch run detail:', err);
-    } finally {
-      setIsLoadingDetail(false);
+  // 切换模式或 runs 变动时，自动严格握手同类型的最新两个实验
+  useEffect(() => {
+    if (modeFilteredRuns.length > 0) {
+      setSelectedLeftRunId(modeFilteredRuns[0].run_id);
+      setSelectedRightRunId(modeFilteredRuns.length > 1 ? modeFilteredRuns[1].run_id : modeFilteredRuns[0].run_id);
+    } else {
+      setSelectedLeftRunId("");
+      setSelectedRightRunId("");
     }
-  };
-  const [selectedRightRunId, setSelectedRightRunId] = useState<string>(runs[1]?.run_id || runs[0]?.run_id || "");
-  const [diffKind, setDiffKind] = useState<"all" | "score" | "backtest">("score");
-
-  // 异步数据载入后自动握手选中最新两期实验
-  React.useEffect(() => {
-    if (runs.length > 0) {
-      const scoreRuns = runs.filter(r => r.kind === "score");
-      const defaultPool = scoreRuns.length >= 2 ? scoreRuns : runs;
-      if (!selectedLeftRunId || !runs.some(r => r.run_id === selectedLeftRunId)) {
-        setSelectedLeftRunId(defaultPool[0].run_id);
-      }
-      if (!selectedRightRunId || !runs.some(r => r.run_id === selectedRightRunId)) {
-        setSelectedRightRunId(defaultPool.length > 1 ? defaultPool[1].run_id : defaultPool[0].run_id);
-      }
-    }
-  }, [runs]);
+  }, [modeFilteredRuns, diffMode]);
 
   // Fast lookup map for symbol -> { name, industry }
   const stockMetaMap = useMemo(() => {
@@ -194,7 +170,7 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-              {runs.map((r) => {
+              {runs.slice((runsPage - 1) * runsPageSize, runsPage * runsPageSize).map((r) => {
                 const isScore = r.kind === 'score';
                 return (
                   <tr key={r.run_id} className="hover:bg-slate-50 transition-colors">
@@ -253,24 +229,145 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
             </tbody>
           </table>
         </div>
+        {/* 表格分页 */}
+        {runs.length > runsPageSize && (
+          <div className="px-4 py-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs bg-slate-50/50">
+            <span className="text-slate-500">
+              第 {runsPage} / {Math.ceil(runs.length / runsPageSize)} 页 · 共 {runs.length} 次归档记录 (每页 10 条)
+            </span>
+            <div className="flex items-center space-x-1">
+              <button
+                type="button"
+                disabled={runsPage <= 1}
+                onClick={() => setRunsPage(p => Math.max(1, p - 1))}
+                className="px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50 cursor-pointer"
+              >
+                上一页
+              </button>
+              {Array.from({ length: Math.ceil(runs.length / runsPageSize) }, (_, i) => i + 1).map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setRunsPage(p)}
+                  className={`px-2.5 py-1 rounded font-mono text-xs cursor-pointer ${
+                    runsPage === p
+                      ? "bg-indigo-600 text-white font-bold shadow-2xs"
+                      : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  {p}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={runsPage >= Math.ceil(runs.length / runsPageSize)}
+                onClick={() => setRunsPage(p => p + 1)}
+                className="px-2.5 py-1 rounded border border-slate-200 bg-white text-slate-600 disabled:opacity-40 hover:bg-slate-50 cursor-pointer"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Runs Difference Comparator */}
+      {/* Runs Difference Comparator (同类型强约束重构) */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-5">
+        {/* 顶部标题与模式分流切页 */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div>
             <div className="flex items-center space-x-2">
               <h3 className="text-sm font-bold text-slate-900">
-                跨实验候选标的与量化效能对比
+                跨实验对比分析 (同类实验严谨比对)
               </h3>
-              <div className="flex items-center space-x-1 bg-slate-100 p-0.5 rounded-lg text-[10px]">
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                同类型强约束
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              严禁跨物种混比：评分快照对比优选股票名单与权重差异；回测对比长期超额收益与夏普比率
+            </p>
+          </div>
+
+          {/* 模式分段切页 */}
+          <div className="flex items-center space-x-2">
+            <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs">
+              <button
+                type="button"
+                onClick={() => setDiffMode("score")}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-medium transition-all ${
+                  diffMode === "score"
+                    ? "bg-white text-indigo-700 font-bold shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span>综合评分对比 (Score Diff)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDiffMode("backtest")}
+                className={`flex items-center space-x-1 px-3 py-1.5 rounded-lg font-medium transition-all ${
+                  diffMode === "backtest"
+                    ? "bg-white text-purple-700 font-bold shadow-xs"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <LineChart className="w-3.5 h-3.5" />
+                <span>策略回测对比 (Backtest Diff)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 下拉选择栏（严格仅展示同类实验） */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center space-x-1.5">
+              <span className="text-xs text-slate-600 font-bold">基准实验 A:</span>
+              <select
+                value={selectedLeftRunId}
+                onChange={(e) => setSelectedLeftRunId(e.target.value)}
+                className="text-xs rounded-lg border border-slate-300 py-1.5 px-2 bg-white text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
+              >
+                {modeFilteredRuns.map(r => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {r.date} · {r.kind === "score" ? "评分快照" : "滚动回测"} ({r.run_id.slice(-8)})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <span className="text-xs text-indigo-600 font-black px-1">VS</span>
+
+            <div className="flex items-center space-x-1.5">
+              <span className="text-xs text-slate-600 font-bold">对比实验 B:</span>
+              <select
+                value={selectedRightRunId}
+                onChange={(e) => setSelectedRightRunId(e.target.value)}
+                className="text-xs rounded-lg border border-slate-300 py-1.5 px-2 bg-white text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
+              >
+                {modeFilteredRuns.map(r => (
+                  <option key={r.run_id} value={r.run_id}>
+                    {r.date} · {r.kind === "score" ? "评分快照" : "滚动回测"} ({r.run_id.slice(-8)})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* 范围微调（仅评分模式） */}
+          {diffMode === "score" && (
+            <div className="flex items-center space-x-1.5 text-xs">
+              <span className="text-slate-500 text-[11px]">对比名单范围:</span>
+              <div className="flex items-center bg-white border border-slate-200 p-0.5 rounded-lg text-[10px]">
                 {[5, 10, 0].map((lim) => (
                   <button
                     key={lim}
                     type="button"
                     onClick={() => setDiffLimit(lim)}
                     className={`px-2 py-0.5 rounded-md font-medium transition-colors ${
-                      diffLimit === lim ? "bg-white text-indigo-700 shadow-2xs font-bold" : "text-slate-500 hover:text-slate-800"
+                      diffLimit === lim ? "bg-indigo-600 text-white font-bold" : "text-slate-500 hover:text-slate-800"
                     }`}
                   >
                     {lim === 0 ? "全部候选" : `Top ${lim}`}
@@ -278,302 +375,264 @@ export const ResearchRunsView: React.FC<ResearchRunsViewProps> = ({
                 ))}
               </div>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              横向对比两个独立实验的参数配置、综合收益表现、重合率及选股流动性
-            </p>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center space-x-1.5">
-                <span className="text-xs text-slate-600 font-bold">实验 A (最新基准):</span>
-                <select
-                  value={selectedLeftRunId}
-                  onChange={(e) => setSelectedLeftRunId(e.target.value)}
-                  className="text-xs rounded-lg border border-slate-300 py-1.5 px-2 bg-white text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
-                >
-                  {runs.map(r => (
-                    <option key={r.run_id} value={r.run_id}>
-                      {r.date} · {r.kind === "score" ? "综合评分" : "前向回测"} ({r.run_id.slice(-8)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <span className="text-xs text-indigo-600 font-black px-1">VS</span>
-
-              <div className="flex items-center space-x-1.5">
-                <span className="text-xs text-slate-600 font-bold">实验 B (对比样本):</span>
-                <select
-                  value={selectedRightRunId}
-                  onChange={(e) => setSelectedRightRunId(e.target.value)}
-                  className="text-xs rounded-lg border border-slate-300 py-1.5 px-2 bg-white text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500 outline-hidden"
-                >
-                  {runs.map(r => (
-                    <option key={r.run_id} value={r.run_id}>
-                      {r.date} · {r.kind === "score" ? "综合评分" : "前向回测"} ({r.run_id.slice(-8)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Macro Metric Side-by-Side Comparison */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-white p-3 rounded-xl border border-slate-200">
-          <div className="p-2 bg-slate-50 rounded-lg">
-            <span className="text-[10px] text-slate-400 block">实验 A 截面表现</span>
-            <strong className="text-slate-900 text-sm font-mono mt-0.5 block">{leftAvg}</strong>
-            <span className="text-[10px] text-slate-500 truncate block">{leftRun?.date} · {leftRun?.kind === "score" ? "综合评分" : "前向回测"}</span>
-          </div>
-          <div className="p-2 bg-slate-50 rounded-lg">
-            <span className="text-[10px] text-slate-400 block">实验 B 截面表现</span>
-            <strong className="text-slate-900 text-sm font-mono mt-0.5 block">{rightAvg}</strong>
-            <span className="text-[10px] text-slate-500 truncate block">{rightRun?.date} · {rightRun?.kind === "score" ? "综合评分" : "前向回测"}</span>
-          </div>
-          <div className="p-2 bg-slate-50 rounded-lg">
-            <span className="text-[10px] text-slate-400 block">标的重合度</span>
-            <strong className="text-indigo-700 text-sm font-mono mt-0.5 block">
-              {leftSymbols.length > 0 ? `${((preserved.length / leftSymbols.length) * 100).toFixed(0)}%` : "0%"}
-            </strong>
-            <span className="text-[10px] text-slate-500 block">两期共有 {preserved.length} 只标的</span>
-          </div>
-          <div className="p-2 bg-slate-50 rounded-lg">
-            <span className="text-[10px] text-slate-400 block">名单置换比例</span>
-            <strong className="text-amber-700 text-sm font-mono mt-0.5 block">
-              {leftSymbols.length > 0 ? `${((newlyAdded.length / leftSymbols.length) * 100).toFixed(0)}%` : "0%"}
-            </strong>
-            <span className="text-[10px] text-slate-500 block">新进 {newlyAdded.length} 只 / 跌出 {dropped.length} 只</span>
-          </div>
-        </div>
-
-        {/* Side-by-Side Top 5 Previews */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
-          {/* Left Run Preview */}
-          <div className="bg-white p-3.5 rounded-lg border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center space-x-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
-                <span className="text-xs font-bold text-slate-900">实验 A ({leftRun.date}) Top 5 标的</span>
+        {/* 模式 1：综合评分候选对比 (Score Diff View) */}
+        {diffMode === "score" ? (
+          <div className="space-y-4">
+            {/* Macro Metric Side-by-Side Comparison */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs bg-white p-3 rounded-xl border border-slate-200">
+              <div className="p-2.5 bg-slate-50 rounded-lg">
+                <span className="text-[10px] text-slate-400 block">实验 A 平均综合分</span>
+                <strong className="text-slate-900 text-sm font-mono mt-0.5 block">{leftRun?.avg_score || "--"} 分</strong>
+                <span className="text-[10px] text-slate-500 truncate block">{leftRun?.date} · 候选 {leftSymbols.length} 只</span>
               </div>
-              <span className="text-[10px] text-slate-400 font-mono">{leftRun.run_id.slice(0, 15)}</span>
+              <div className="p-2.5 bg-slate-50 rounded-lg">
+                <span className="text-[10px] text-slate-400 block">实验 B 平均综合分</span>
+                <strong className="text-slate-900 text-sm font-mono mt-0.5 block">{rightRun?.avg_score || "--"} 分</strong>
+                <span className="text-[10px] text-slate-500 truncate block">{rightRun?.date} · 候选 {rightSymbols.length} 只</span>
+              </div>
+              <div className="p-2.5 bg-slate-50 rounded-lg">
+                <span className="text-[10px] text-slate-400 block">两期标的重合度</span>
+                <strong className="text-indigo-700 text-sm font-mono mt-0.5 block">
+                  {leftSymbols.length > 0 ? `${((preserved.length / leftSymbols.length) * 100).toFixed(0)}%` : "0%"}
+                </strong>
+                <span className="text-[10px] text-slate-500 block">两期共有 {preserved.length} 只标的</span>
+              </div>
+              <div className="p-2.5 bg-slate-50 rounded-lg">
+                <span className="text-[10px] text-slate-400 block">名单置换变化率</span>
+                <strong className="text-amber-700 text-sm font-mono mt-0.5 block">
+                  {leftSymbols.length > 0 ? `${((newlyAdded.length / leftSymbols.length) * 100).toFixed(0)}%` : "0%"}
+                </strong>
+                <span className="text-[10px] text-slate-500 block">新进 {newlyAdded.length} 只 / 跌出 {dropped.length} 只</span>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              {leftSymbols.map((sym, idx) => {
-                const inBoth = rightSymbols.includes(sym);
-                return (
-                  <div 
-                    key={sym} 
-                    className={`px-3 py-2 rounded-lg border flex items-center justify-between text-xs transition-colors ${
-                      inBoth 
-                        ? 'bg-slate-50/60 border-slate-200' 
-                        : 'bg-emerald-50/50 border-emerald-200'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5">
-                      <span className="font-mono font-bold text-slate-400 w-4 text-center">#{idx + 1}</span>
-                      <div>
-                        <div className="font-bold text-slate-900">{getStockName(sym)}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">{sym} · {getStockIndustry(sym)}</div>
-                      </div>
-                    </div>
-                    <div>
-                      {inBoth ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700">
-                          两期均在
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
-                          实验A特有
-                        </span>
-                      )}
-                    </div>
+
+            {/* Side-by-Side Previews */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
+              {/* Left Run Preview */}
+              <div className="bg-white p-3.5 rounded-lg border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div className="flex items-center space-x-2">
+                    <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                    <span className="text-xs font-bold text-slate-900">实验 A ({leftRun?.date}) 候选标的</span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Right Run Preview */}
-          <div className="bg-white p-3.5 rounded-lg border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div className="flex items-center space-x-2">
-                <span className="w-2 h-2 rounded-full bg-slate-500"></span>
-                <span className="text-xs font-bold text-slate-900">实验 B ({rightRun.date}) Top 5 标的</span>
-              </div>
-              <span className="text-[10px] text-slate-400 font-mono">{rightRun.run_id.slice(0, 15)}</span>
-            </div>
-            <div className="space-y-1.5">
-              {rightSymbols.map((sym, idx) => {
-                const inBoth = leftSymbols.includes(sym);
-                return (
-                  <div 
-                    key={sym} 
-                    className={`px-3 py-2 rounded-lg border flex items-center justify-between text-xs transition-colors ${
-                      inBoth 
-                        ? 'bg-slate-50/60 border-slate-200' 
-                        : 'bg-rose-50/50 border-rose-200'
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5">
-                      <span className="font-mono font-bold text-slate-400 w-4 text-center">#{idx + 1}</span>
-                      <div>
-                        <div className="font-bold text-slate-900">{getStockName(sym)}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">{sym} · {getStockIndustry(sym)}</div>
+                  <span className="text-[10px] text-slate-400 font-mono">{leftRun?.run_id?.slice(0, 15)}</span>
+                </div>
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {leftSymbols.map((sym, idx) => {
+                    const inBoth = rightSymbols.includes(sym);
+                    return (
+                      <div
+                        key={sym}
+                        className={`px-3 py-2 rounded-lg border flex items-center justify-between text-xs transition-colors ${
+                          inBoth ? "bg-slate-50/60 border-slate-200" : "bg-emerald-50/50 border-emerald-200"
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <span className="font-mono font-bold text-slate-400 w-4 text-center">#{idx + 1}</span>
+                          <div>
+                            <div className="font-bold text-slate-900">{getStockName(sym)}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{sym} · {getStockIndustry(sym)}</div>
+                          </div>
+                        </div>
+                        <div>
+                          {inBoth ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700">
+                              两期均在
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800">
+                              实验A新进
+                            </span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      {inBoth ? (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700">
-                          两期均在
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-800">
-                          实验B特有
-                        </span>
-                      )}
-                    </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Right Run Preview */}
+              <div className="bg-white p-3.5 rounded-lg border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                  <div className="flex items-center space-x-2">
+                    <span className="w-2 h-2 rounded-full bg-slate-500"></span>
+                    <span className="text-xs font-bold text-slate-900">实验 B ({rightRun?.date}) 候选标的</span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-
-        {/* Diff Result Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
-          {/* Newly Entered */}
-          <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-2.5">
-                <div className="flex items-center space-x-1.5 text-emerald-800 font-bold text-xs">
-                  <ArrowUpRight className="w-4 h-4 text-emerald-600" />
-                  <span>新晋入选标的 (Newly Entered in A)</span>
+                  <span className="text-[10px] text-slate-400 font-mono">{rightRun?.run_id?.slice(0, 15)}</span>
                 </div>
-                <span className="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                  {newlyAdded.length} 只
-                </span>
-              </div>
-              <p className="text-[11px] text-emerald-700 mb-3">
-                在实验 A 中入选前列，但在实验 B 中未进入 Top 5
-              </p>
-
-              {newlyAdded.length > 0 ? (
-                <div className="space-y-2">
-                  {newlyAdded.map(s => (
-                    <div key={s} className="p-2.5 bg-white rounded-lg border border-emerald-200 text-xs shadow-2xs flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-slate-900 flex items-center space-x-1.5">
-                          <span>{getStockName(s)}</span>
-                          <span className="font-mono text-[10px] text-slate-400 font-normal">({s})</span>
+                <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                  {rightSymbols.map((sym, idx) => {
+                    const inBoth = leftSymbols.includes(sym);
+                    return (
+                      <div
+                        key={sym}
+                        className={`px-3 py-2 rounded-lg border flex items-center justify-between text-xs transition-colors ${
+                          inBoth ? "bg-slate-50/60 border-slate-200" : "bg-rose-50/50 border-rose-200"
+                        }`}
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <span className="font-mono font-bold text-slate-400 w-4 text-center">#{idx + 1}</span>
+                          <div>
+                            <div className="font-bold text-slate-900">{getStockName(sym)}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">{sym} · {getStockIndustry(sym)}</div>
+                          </div>
                         </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {getStockIndustry(s)}
+                        <div>
+                          {inBoth ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 text-indigo-700">
+                              两期均在
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-rose-100 text-rose-800">
+                              实验B特有
+                            </span>
+                          )}
                         </div>
                       </div>
-                      <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                        新晋前列
-                      </span>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              ) : (
-                <div className="py-4 text-center text-xs text-emerald-600/80 bg-white/50 rounded-lg border border-emerald-100">
-                  无新晋标的，两期前优名单完全重合或子集
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Dropped Out */}
-          <div className="p-4 bg-rose-50/70 border border-rose-200 rounded-xl flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-2.5">
-                <div className="flex items-center space-x-1.5 text-rose-800 font-bold text-xs">
-                  <ArrowDownRight className="w-4 h-4 text-rose-600" />
-                  <span>跌出优选标的 (Dropped Out from B)</span>
-                </div>
-                <span className="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800">
-                  {dropped.length} 只
-                </span>
               </div>
-              <p className="text-[11px] text-rose-700 mb-3">
-                在实验 B 中曾位居前列，但在实验 A 中已滑出 Top 5
-              </p>
-
-              {dropped.length > 0 ? (
-                <div className="space-y-2">
-                  {dropped.map(s => (
-                    <div key={s} className="p-2.5 bg-white rounded-lg border border-rose-200 text-xs shadow-2xs flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-slate-900 flex items-center space-x-1.5">
-                          <span>{getStockName(s)}</span>
-                          <span className="font-mono text-[10px] text-slate-400 font-normal">({s})</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {getStockIndustry(s)}
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
-                        排名滑落
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-4 text-center text-xs text-rose-600/80 bg-white/50 rounded-lg border border-rose-100">
-                  无跌出标的
-                </div>
-              )}
             </div>
-          </div>
 
-          {/* Preserved / Stable */}
-          <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-xl flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-2.5">
-                <div className="flex items-center space-x-1.5 text-indigo-800 font-bold text-xs">
-                  <CheckCircle2 className="w-4 h-4 text-indigo-600" />
-                  <span>持续保持稳定 (Stable Tickers)</span>
+            {/* Diff Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+              {/* 新进 */}
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-emerald-800 flex items-center">
+                      <ArrowUpRight className="w-4 h-4 mr-1 text-emerald-600" />
+                      新晋优选标的
+                    </span>
+                    <span className="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                      {newlyAdded.length} 只
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {newlyAdded.length === 0 ? (
+                      <div className="py-3 text-center text-xs text-emerald-600/70">无新晋标的，名单完全子集</div>
+                    ) : (
+                      newlyAdded.map(s => (
+                        <div key={s} className="p-2 bg-white rounded border border-emerald-200 text-xs flex items-center justify-between">
+                          <span className="font-bold text-slate-900">{getStockName(s)} ({s})</span>
+                          <span className="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded">新入围</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
-                <span className="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">
-                  {preserved.length} 只
-                </span>
               </div>
-              <p className="text-[11px] text-indigo-700 mb-3">
-                在实验 A 与实验 B 两期均位列 Top 5 的高稳定性核心标的
-              </p>
 
-              {preserved.length > 0 ? (
-                <div className="space-y-2">
-                  {preserved.map(s => (
-                    <div key={s} className="p-2.5 bg-white rounded-lg border border-indigo-200 text-xs shadow-2xs flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-slate-900 flex items-center space-x-1.5">
-                          <span>{getStockName(s)}</span>
-                          <span className="font-mono text-[10px] text-slate-400 font-normal">({s})</span>
+              {/* 跌出 */}
+              <div className="p-4 bg-rose-50/70 border border-rose-200 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-rose-800 flex items-center">
+                      <ArrowDownRight className="w-4 h-4 mr-1 text-rose-600" />
+                      跌出优选标的
+                    </span>
+                    <span className="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800">
+                      {dropped.length} 只
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {dropped.length === 0 ? (
+                      <div className="py-3 text-center text-xs text-rose-600/70">无跌出标的</div>
+                    ) : (
+                      dropped.map(s => (
+                        <div key={s} className="p-2 bg-white rounded border border-rose-200 text-xs flex items-center justify-between">
+                          <span className="font-bold text-slate-900">{getStockName(s)} ({s})</span>
+                          <span className="text-[10px] text-rose-700 font-semibold bg-rose-50 px-1.5 py-0.5 rounded">滑出名单</span>
                         </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {getStockIndustry(s)}
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 稳定 */}
+              <div className="p-4 bg-indigo-50/70 border border-indigo-200 rounded-xl flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-indigo-800 flex items-center">
+                      <CheckCircle2 className="w-4 h-4 mr-1 text-indigo-600" />
+                      两期持续稳健重合
+                    </span>
+                    <span className="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                      {preserved.length} 只
+                    </span>
+                  </div>
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {preserved.length === 0 ? (
+                      <div className="py-3 text-center text-xs text-indigo-600/70">两期无共同重合标的</div>
+                    ) : (
+                      preserved.map(s => (
+                        <div key={s} className="p-2 bg-white rounded border border-indigo-200 text-xs flex items-center justify-between">
+                          <span className="font-bold text-slate-900">{getStockName(s)} ({s})</span>
+                          <span className="text-[10px] text-indigo-700 font-semibold bg-indigo-50 px-1.5 py-0.5 rounded">持续入围</span>
                         </div>
-                      </div>
-                      <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
-                        持续优选
-                      </span>
-                    </div>
-                  ))}
+                      ))
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <div className="py-4 text-center text-xs text-indigo-600/80 bg-white/50 rounded-lg border border-indigo-100">
-                  两期实验无共同重合标的
-                </div>
-              )}
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          /* 模式 2：策略回测业绩对比 (Backtest Diff View) */
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                <span className="text-[11px] text-slate-500 block">累计超额收益对比</span>
+                <div className="mt-1 flex items-baseline space-x-2">
+                  <span className="text-base font-bold font-mono text-purple-700">{leftRun?.excess_return != null ? `+${leftRun.excess_return}%` : "--"}</span>
+                  <span className="text-xs text-slate-400">vs</span>
+                  <span className="text-sm font-mono text-slate-600">{rightRun?.excess_return != null ? `+${rightRun.excess_return}%` : "--"}</span>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">扣除全额交易摩擦后</span>
+              </div>
+
+              <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                <span className="text-[11px] text-slate-500 block">夏普比率 (Sharpe) 对比</span>
+                <div className="mt-1 flex items-baseline space-x-2">
+                  <span className="text-base font-bold font-mono text-indigo-700">{leftRun?.sharpe || "--"}</span>
+                  <span className="text-xs text-slate-400">vs</span>
+                  <span className="text-sm font-mono text-slate-600">{rightRun?.sharpe || "--"}</span>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">单位总波动收益性价比</span>
+              </div>
+
+              <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                <span className="text-[11px] text-slate-500 block">回测调仓期数对比</span>
+                <div className="mt-1 flex items-baseline space-x-2">
+                  <span className="text-base font-bold font-mono text-slate-900">{leftRun?.stock_count || 36} 期</span>
+                  <span className="text-xs text-slate-400">vs</span>
+                  <span className="text-sm font-mono text-slate-600">{rightRun?.stock_count || 36} 期</span>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">样本外非重叠区间</span>
+              </div>
+
+              <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                <span className="text-[11px] text-slate-500 block">综合量化评估结论</span>
+                <div className="mt-1 font-bold text-xs text-emerald-700">
+                  {(Number(leftRun?.sharpe) || 0) >= (Number(rightRun?.sharpe) || 0) ? "实验 A 收益风险比占优" : "实验 B 稳定性更佳"}
+                </div>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">基于样本外超额与波动</span>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
+              💡 <strong>回测对比提示：</strong> 策略回测对比侧重于中长期净值稳定性与最大回撤控制。若实验 A 的夏普比率显著更高，说明在同等波动下创造了更多超额 alpha。
+            </div>
+          </div>
+        )}
       </div>
-      {/* Run Detail Modal */}
+
+      {/* Run Detail Modal */}{/* Run Detail Modal */}
       {activeRunDetail && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[85vh] overflow-y-auto">
