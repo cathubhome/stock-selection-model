@@ -648,7 +648,7 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
           <h4 className="text-sm font-bold text-slate-900">入选标的行业集中度暴露 (Industry Concentration)</h4>
           <p className="text-xs text-slate-500">
-            按申万一级行业监控持仓分布，避免过度暴露于单一周期行业
+            按申万一级行业监控历史回测持仓的赛道集中度，防范模型将多因子超额收益扭曲为单一高风险赛道的被动押注 (行业中性化审计)
           </p>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-2">
@@ -666,11 +666,24 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
       )}
 
       {/* Tab 6: Detail */}
-      {activeTab === 'detail' && (
+      {activeTab === "detail" && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-            <h4 className="text-sm font-bold text-slate-900">逐期调仓记录明细 (Rebalance History)</h4>
-            <span className="text-xs text-slate-500">共 {periods.length} 轮调仓</span>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900">逐期前向调仓记录账本</h4>
+              <p className="text-xs text-slate-500 mt-0.5">算法模型在样本外历史时钟中全自动推演的选股变动与扣费盈亏流水</p>
+            </div>
+            <span className="text-xs font-mono px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">共 {periods.length} 轮模拟调仓</span>
+          </div>
+          {/* 量化模拟非实盘声明说明 */}
+          <div className="p-3 bg-indigo-50/70 border-b border-indigo-100 flex items-start space-x-2.5 text-xs text-indigo-950">
+            <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <strong className="font-semibold text-indigo-900">量化模拟机制说明：</strong>
+              <span className="text-slate-600">
+                此处的“调仓记录”为算法模型在历史回测时钟里模拟的选股变动与换手账本，非真实券商交易下单。每个调仓日在 T 日收盘产生评分，严格在 T+1 日开盘买入并扣除交易税费与滑点，每轮持有 {config.horizon} 交易日，是检验策略真实性的白盒审计底牌。
+              </span>
+            </div>
           </div>
 
           <div className="overflow-x-auto max-h-96">
@@ -684,6 +697,7 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
                   <th className="py-2.5 px-3">基准收益</th>
                   <th className="py-2.5 px-3">摩擦扣减</th>
                   <th className="py-2.5 px-3">净超额收益</th>
+                  <th className="py-2.5 px-3 text-right">单期胜负</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
@@ -703,8 +717,20 @@ export const BacktestView: React.FC<BacktestViewProps> = ({
                     <td className="py-2.5 px-3 text-slate-400">
                       -{(p.cost_deducted ?? 0).toFixed(2)}%
                     </td>
-                    <td className={`py-2.5 px-3 font-bold ${p.excess_return >= 0 ? 'text-indigo-600' : 'text-slate-500'}`}>
+                    <td className={`py-2.5 px-3 font-bold ${p.excess_return >= 0 ? "text-indigo-600" : "text-slate-500"}`}>
                       {p.excess_return >= 0 ? `+${p.excess_return.toFixed(2)}%` : `${p.excess_return.toFixed(2)}%`}
+                    </td>
+                    <td className="py-2.5 px-3 text-right">
+                      {p.excess_return > 0 ? (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 mr-0.5 text-emerald-600" />
+                          跑赢基准
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                          落后基准
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
