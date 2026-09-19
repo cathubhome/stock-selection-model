@@ -7,6 +7,7 @@ import os
 import shutil
 import threading
 import time
+import requests
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -555,12 +556,17 @@ def get_stock_pool() -> List[Dict[str, Any]]:
         except Exception:
             pass
 
+    quote_snapshots = _fetch_quote_snapshots(pool_df['symbol'].astype(str).tolist())
+
     result: List[Dict[str, Any]] = []
     for _, row in pool_df.iterrows():
         sym = str(row['symbol']).zfill(6)
         u_info = u_map.get(sym, {})
         s_info = latest_score_map.get(sym, {})
         market_info = _latest_market_values(sym)
+        quote_snapshot = quote_snapshots.get(sym, {})
+        latest_price = optional_float(quote_snapshot.get('latest_price'))
+        circulating_market_cap = optional_float(quote_snapshot.get('circulating_market_cap'))
 
         price = market_info.get('price', round(safe_float(s_info.get('close'), 10.0), 2))
         change_val = s_info.get('涨跌幅')
@@ -602,9 +608,11 @@ def get_stock_pool() -> List[Dict[str, Any]]:
             'source': str(row.get('source', '本地股票池')),
             'added_at': str(row.get('added_at', '')),
             'price': price,
+            'latest_price': latest_price,
             'change': change,
             'turnover': turnover,
             'amount': market_info.get('amount', safe_float(s_info.get('amount'))),
+            'circulating_market_cap': circulating_market_cap,
             'market_date': market_info.get('market_date'),
             'pe_ttm': pe_ttm_val,
             'pb': pb_val,
@@ -897,6 +905,47 @@ def _get_security_quote_meta(symbol: str) -> Dict[str, Any]:
     }
     _META_QUOTE_CACHE[sym] = res
     return res
+
+
+def _fetch_quote_snapshots(symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Batch-fetch the latest unadjusted price and circulating market cap."""
+    snapshots: Dict[str, Dict[str, Any]] = {}
+    clean_symbols = list(dict.fromkeys(
+        str(symbol).strip().zfill(6)
+        for symbol in symbols
+        if str(symbol).strip().isdigit() and len(str(symbol).strip().zfill(6)) == 6
+    ))
+
+    for offset in range(0, len(clean_symbols), 50):
+        chunk = clean_symbols[offset:offset + 50]
+        codes = [
+            ("sh" if symbol.startswith(("5", "6", "9")) else "bj" if symbol.startswith(("4", "8")) else "sz") + symbol
+            for symbol in chunk
+        ]
+        try:
+            response = requests.get(
+                "http://qt.gtimg.cn/q=" + ",".join(codes),
+                timeout=5,
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "http://gu.qq.com/"},
+            )
+            if response.status_code != 200:
+                continue
+            for line in response.content.decode("gbk", errors="ignore").splitlines():
+                if '="' not in line:
+                    continue
+                fields = line.split('="', 1)[1].rstrip('";').split('~')
+                if len(fields) <= 46 or not str(fields[2]).isdigit():
+                    continue
+                symbol = str(fields[2]).zfill(6)
+                snapshots[symbol] = {
+                    'latest_price': safe_float(fields[3]) or None,
+                    'circulating_market_cap': (safe_float(fields[44]) or 0) * 1e8 or None,
+                }
+        except Exception:
+            continue
+
+    return snapshots
+
 
 @app.get('/api/scores/latest')
 def get_latest_scores() -> Dict[str, Any]:

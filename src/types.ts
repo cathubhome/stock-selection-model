@@ -12,11 +12,13 @@ export interface MarketQuote {
   symbol: string;
   name: string;
   price: number;
+  latest_price?: number;
   change: number;
   turnover: number;
   volume_ratio: number;
   volume: number;
   amount: number;
+  circulating_market_cap?: number;
   pe_ttm?: number;
   pb?: number;
   high_52w?: number;

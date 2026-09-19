@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { 
-  Search, 
   Plus, 
   Trash2, 
   CheckCircle2, 
@@ -45,16 +45,17 @@ const ALL_SW_L1_FLAT = SW_L1_CATEGORIES.flatMap(c => c.items);
 
 const MARKET_ORDER = ['主板', '创业板', '科创板', '港股通'];
 const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
-const NUMERIC_SORT_KEYS = ['price', 'change', 'turnover', 'amount', 'pe_ttm'] as const;
+const NUMERIC_SORT_KEYS = ['latest_price', 'change', 'turnover', 'amount', 'circulating_market_cap', 'pe_ttm'] as const;
 
 type StockPoolSortKey =
   | 'name'
   | 'industry'
   | 'market'
-  | 'price'
+  | 'latest_price'
   | 'change'
   | 'turnover'
   | 'amount'
+  | 'circulating_market_cap'
   | 'pe_ttm'
   | 'source'
   | 'added_at';
@@ -135,21 +136,50 @@ interface FilterPopoverProps {
 
 const FilterPopover: React.FC<FilterPopoverProps> = ({ active, children }) => {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
 
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
+    if (!open || !buttonRef.current) return;
+
+    const updatePosition = () => {
+      if (!buttonRef.current) return;
+      const rect = buttonRef.current.getBoundingClientRect();
+      setPosition({
+        left: Math.max(8, Math.min(rect.right, window.innerWidth - 208)),
+        top: rect.bottom + 4,
+      });
     };
+
+    updatePosition();
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+    return () => {
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || popoverRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [open]);
 
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen(prev => !prev)}
         className={'inline-flex items-center justify-center rounded p-0.5 transition-colors ' + (active ? 'text-indigo-600 hover:text-indigo-700' : 'text-slate-400 hover:text-indigo-600')}
@@ -158,11 +188,18 @@ const FilterPopover: React.FC<FilterPopoverProps> = ({ active, children }) => {
         <Filter className="h-3 w-3" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+        createPortal(
+          <div
+            ref={popoverRef}
+            style={{ position: 'fixed', left: position.left, top: position.top }}
+            className="z-50 w-48 rounded-lg border border-slate-200 bg-white p-2 shadow-lg"
+          >
           {children}
-        </div>
+          </div>,
+          document.body,
+        )
       )}
-    </div>
+    </>
   );
 };
 
@@ -550,7 +587,20 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
 
   // Export CSV
   const handleExportCSV = () => {
-    const headers = ['symbol', 'name', 'source', 'added_at', 'industry', 'market', 'price', 'change', 'turnover', 'composite_score'];
+    const headers = [
+      'symbol',
+      'name',
+      'source',
+      'added_at',
+      'industry',
+      'market',
+      'latest_price',
+      'change',
+      'turnover',
+      'amount',
+      'circulating_market_cap',
+      'composite_score',
+    ];
     const rows = sortedStocks.map(s => [
       s.symbol,
       s.name,
@@ -558,9 +608,11 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
       s.added_at || '2026-08-10 00:00:00',
       s.industry,
       s.market,
-      s.price,
+      s.latest_price ?? '',
       s.change,
       s.turnover,
+      s.amount,
+      s.circulating_market_cap ?? '',
       s.composite_score
     ]);
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
@@ -878,10 +930,11 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                     </FilterPopover>
                   }
                 />
-                <SortableTh label="最新价 (后复权)" sortKey="price" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="最新价" sortKey="latest_price" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
                 <SortableTh label="日涨跌幅" sortKey="change" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
                 <SortableTh label="换手率" sortKey="turnover" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
                 <SortableTh label="成交额" sortKey="amount" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="流通市值" sortKey="circulating_market_cap" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
                 <SortableTh label="市盈率 (TTM)" sortKey="pe_ttm" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
                 <SortableTh label="导入来源" sortKey="source" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} />
                 <SortableTh label="加入时间" sortKey="added_at" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} />
@@ -891,7 +944,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredStocks.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="py-8 text-center text-slate-400">
+                  <td colSpan={13} className="py-8 text-center text-slate-400">
                     未找到匹配的股票标的
                   </td>
                 </tr>
@@ -912,7 +965,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                       </span>
                     </td>
                     <td className="py-3 px-4 font-semibold text-slate-900">
-                      ¥{(Number(stock.price) || 0).toFixed(2)}
+                      {stock.latest_price == null ? '--' : `¥${Number(stock.latest_price).toFixed(2)}`}
                     </td>
                     <td className="py-3 px-4">
                       <span className={`font-semibold ${(Number(stock.change) || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
@@ -924,6 +977,9 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                     </td>
                     <td className="py-3 px-4 text-slate-700">
                       {((Number(stock.amount) || 0) / 100000000).toFixed(2)} 亿
+                    </td>
+                    <td className="py-3 px-4 text-slate-700">
+                      {stock.circulating_market_cap == null ? '--' : `${(Number(stock.circulating_market_cap) / 100000000).toFixed(2)} 亿`}
                     </td>
                     <td className="py-3 px-4 text-slate-700">
                       {stock.pe_ttm != null ? (stock.pe_ttm < 0 ? `亏损 (${Number(stock.pe_ttm).toFixed(1)})` : Number(stock.pe_ttm).toFixed(1)) : '--'}
