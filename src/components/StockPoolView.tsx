@@ -43,6 +43,189 @@ const SW_L1_CATEGORIES: Array<{ category: string; items: string[] }> = [
 
 const ALL_SW_L1_FLAT = SW_L1_CATEGORIES.flatMap(c => c.items);
 
+const MARKET_ORDER = ['主板', '创业板', '科创板', '港股通'];
+const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+const NUMERIC_SORT_KEYS = ['price', 'change', 'turnover', 'amount', 'pe_ttm'] as const;
+
+type StockPoolSortKey =
+  | 'name'
+  | 'industry'
+  | 'market'
+  | 'price'
+  | 'change'
+  | 'turnover'
+  | 'amount'
+  | 'pe_ttm'
+  | 'source'
+  | 'added_at';
+
+const isNumericSortKey = (key: StockPoolSortKey): key is typeof NUMERIC_SORT_KEYS[number] =>
+  (NUMERIC_SORT_KEYS as readonly string[]).includes(key);
+
+const compareStocks = (a: ScoredStock, b: ScoredStock, key: StockPoolSortKey, asc: boolean) => {
+  const direction = asc ? 1 : -1;
+
+  if (key === 'market') {
+    return (MARKET_ORDER.indexOf(a.market) - MARKET_ORDER.indexOf(b.market)) * direction;
+  }
+
+  if (isNumericSortKey(key)) {
+    const aValue = a[key] == null ? null : Number(a[key]);
+    const bValue = b[key] == null ? null : Number(b[key]);
+    if (aValue == null && bValue == null) return 0;
+    if (aValue == null) return 1;
+    if (bValue == null) return -1;
+    return (aValue - bValue) * direction;
+  }
+
+  const aValue = String((a as any)[key] ?? '');
+  const bValue = String((b as any)[key] ?? '');
+  return collator.compare(aValue, bValue) * direction;
+};
+
+interface SortableThProps {
+  label: string;
+  sortKey: StockPoolSortKey;
+  activeSortKey: StockPoolSortKey;
+  sortAsc: boolean;
+  onSort: (key: StockPoolSortKey) => void;
+  filter?: React.ReactNode;
+  align?: 'left' | 'right';
+}
+
+const SortableTh: React.FC<SortableThProps> = ({
+  label,
+  sortKey,
+  activeSortKey,
+  sortAsc,
+  onSort,
+  filter,
+  align = 'left',
+}) => {
+  const isActive = activeSortKey === sortKey;
+  return (
+    <th
+      className={'py-3 px-4 ' + (align === 'right' ? 'text-right' : 'text-left')}
+      aria-sort={isActive ? (sortAsc ? 'ascending' : 'descending') : 'none'}
+    >
+      <div className={'flex items-center ' + (align === 'right' ? 'justify-end' : 'justify-start') + ' gap-1'}>
+        <button
+          type="button"
+          onClick={() => onSort(sortKey)}
+          className="inline-flex items-center gap-1 font-semibold text-slate-600 transition-colors hover:text-indigo-600"
+          title={isActive ? (sortAsc ? '切换为降序' : '切换为升序') : '点击排序'}
+        >
+          <span>{label}</span>
+          {isActive ? (
+            sortAsc ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronDown className="h-3 w-3 opacity-40" />
+          )}
+        </button>
+        {filter}
+      </div>
+    </th>
+  );
+};
+
+interface FilterPopoverProps {
+  active: boolean;
+  children: React.ReactNode;
+}
+
+const FilterPopover: React.FC<FilterPopoverProps> = ({ active, children }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        className={'inline-flex items-center justify-center rounded p-0.5 transition-colors ' + (active ? 'text-indigo-600 hover:text-indigo-700' : 'text-slate-400 hover:text-indigo-600')}
+        title="筛选"
+      >
+        <Filter className="h-3 w-3" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface MultiSelectFilterProps {
+  options: string[];
+  selected: string[];
+  onToggle: (value: string) => void;
+  onClear: () => void;
+}
+
+const MultiSelectFilter: React.FC<MultiSelectFilterProps> = ({ options, selected, onToggle, onClear }) => (
+  <div className="space-y-1">
+    <div className="max-h-40 overflow-y-auto pr-1">
+      {options.length === 0 ? (
+        <div className="py-2 text-center text-[11px] text-slate-400">暂无可选值</div>
+      ) : (
+        options.map(option => (
+          <label key={option} className="flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50">
+            <input
+              type="checkbox"
+              checked={selected.includes(option)}
+              onChange={() => onToggle(option)}
+              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>{option}</span>
+          </label>
+        ))
+      )}
+    </div>
+    <button
+      type="button"
+      onClick={onClear}
+      className="w-full rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+    >
+      清空筛选
+    </button>
+  </div>
+);
+
+interface NameSearchFilterProps {
+  value: string;
+  onChange: (value: string) => void;
+}
+
+const NameSearchFilter: React.FC<NameSearchFilterProps> = ({ value, onChange }) => (
+  <div className="space-y-1">
+    <input
+      type="text"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder="按简称搜索"
+      className="w-full rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-700 focus:border-indigo-500 focus:outline-none"
+    />
+    <button
+      type="button"
+      onClick={() => onChange('')}
+      className="w-full rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+    >
+      清空
+    </button>
+  </div>
+);
+
 export const StockPoolView: React.FC<StockPoolViewProps> = ({
   stocks,
   onAddStock,
@@ -50,8 +233,11 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   onSelectStock,
   onRefreshPool,
 }) => {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [marketFilter, setMarketFilter] = useState<string>('全部');
+  const [nameFilter, setNameFilter] = useState('');
+  const [industryFilter, setIndustryFilter] = useState<string[]>([]);
+  const [marketFilter, setMarketFilter] = useState<string[]>([]);
+  const [sortKey, setSortKey] = useState<StockPoolSortKey>('name');
+  const [sortAsc, setSortAsc] = useState(true);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -208,27 +394,51 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
     }
   };
 
-  // Filtered stocks based on query & market
+  // Filtered and sorted stocks based on header controls
   const filteredStocks = useMemo(() => {
-    return stocks.filter((stock) => {
-      const matchQuery = 
-        stock.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        stock.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        stock.industry.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        stock.pinyin.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      const matchMarket = marketFilter === '全部' || stock.market === marketFilter;
-      return matchQuery && matchMarket;
+    const keyword = nameFilter.trim().toLowerCase();
+    return stocks.filter(stock => {
+      const matchName = !keyword || stock.name.toLowerCase().includes(keyword);
+      const matchIndustry = industryFilter.length === 0 || industryFilter.includes(stock.industry || '待补全');
+      const matchMarket = marketFilter.length === 0 || marketFilter.includes(stock.market || '未知');
+      return matchName && matchIndustry && matchMarket;
     });
-  }, [stocks, searchQuery, marketFilter]);
+  }, [stocks, nameFilter, industryFilter, marketFilter]);
+
+  const sortedStocks = useMemo(() => {
+    const list = [...filteredStocks];
+    list.sort((a, b) => compareStocks(a, b, sortKey, sortAsc));
+    return list;
+  }, [filteredStocks, sortKey, sortAsc]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, marketFilter]);
+  }, [nameFilter, industryFilter, marketFilter, sortKey, sortAsc]);
+
+  const toggleSort = (key: StockPoolSortKey) => {
+    if (sortKey === key) {
+      setSortAsc(prev => !prev);
+    } else {
+      setSortKey(key);
+      setSortAsc(true);
+    }
+  };
+
+  const toggleListFilter = (list: string[], value: string) =>
+    list.includes(value) ? list.filter(item => item !== value) : [...list, value];
+
+  const industryOptions = useMemo(
+    () => Array.from(new Set(stocks.map(stock => stock.industry || '待补全'))).sort((a, b) => collator.compare(a, b)),
+    [stocks],
+  );
+  const marketOptions = useMemo(
+    () => Array.from(new Set(stocks.map(stock => stock.market || '未知'))).sort((a, b) => MARKET_ORDER.indexOf(a) - MARKET_ORDER.indexOf(b)),
+    [stocks],
+  );
 
   const totalPages = Math.max(1, Math.ceil(filteredStocks.length / pageSize));
   const activePage = Math.min(currentPage, totalPages);
-  const pagedStocks = filteredStocks.slice((activePage - 1) * pageSize, activePage * pageSize);
+  const pagedStocks = sortedStocks.slice((activePage - 1) * pageSize, activePage * pageSize);
   const pageNumbers = Array.from(
     { length: Math.min(5, totalPages) },
     (_, index) => Math.max(1, Math.min(activePage - 2, totalPages - 4)) + index,
@@ -341,7 +551,7 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
   // Export CSV
   const handleExportCSV = () => {
     const headers = ['symbol', 'name', 'source', 'added_at', 'industry', 'market', 'price', 'change', 'turnover', 'composite_score'];
-    const rows = filteredStocks.map(s => [
+    const rows = sortedStocks.map(s => [
       s.symbol,
       s.name,
       s.source || '历史对话提取',
@@ -615,54 +825,66 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
         </div>
       </div>
 
-      {/* Filter and Search Controls */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            placeholder="检索代码、简称、行业、拼音简写 (如 300476, 胜宏科技, SHKJ)..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-300 text-xs focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-hidden bg-white"
-          />
-        </div>
-
-        <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 sm:pb-0">
-          <Filter className="w-3.5 h-3.5 text-slate-400 mr-1 hidden sm:block" />
-          {['全部', '主板', '创业板', '科创板', '港股通'].map((market) => (
-            <button
-              key={market}
-              onClick={() => setMarketFilter(market)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
-                marketFilter === market
-                  ? 'bg-indigo-600 text-white font-semibold'
-                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-              }`}
-            >
-              {market}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Main Stock Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs text-slate-700">
             <thead className="bg-slate-50 text-slate-600 text-[11px] font-semibold border-b border-slate-200">
               <tr>
-                <th className="py-3 px-4">序号</th>
-                <th className="py-3 px-4">代码 / 简称</th>
-                <th className="py-3 px-4">行业分类</th>
-                <th className="py-3 px-4">板块</th>
-                <th className="py-3 px-4">最新价 (后复权)</th>
-                <th className="py-3 px-4">日涨跌幅</th>
-                <th className="py-3 px-4">换手率</th>
-                <th className="py-3 px-4">成交额</th>
-                <th className="py-3 px-4">市盈率 (TTM)</th>
-                <th className="py-3 px-4">导入来源</th>
-                <th className="py-3 px-4">加入时间</th>
+                <th className="py-3 px-4 text-left">序号</th>
+                <SortableTh
+                  label="代码 / 简称"
+                  sortKey="name"
+                  activeSortKey={sortKey}
+                  sortAsc={sortAsc}
+                  onSort={toggleSort}
+                  filter={
+                    <FilterPopover active={Boolean(nameFilter.trim())}>
+                      <NameSearchFilter value={nameFilter} onChange={setNameFilter} />
+                    </FilterPopover>
+                  }
+                />
+                <SortableTh
+                  label="行业分类"
+                  sortKey="industry"
+                  activeSortKey={sortKey}
+                  sortAsc={sortAsc}
+                  onSort={toggleSort}
+                  filter={
+                    <FilterPopover active={industryFilter.length > 0}>
+                      <MultiSelectFilter
+                        options={industryOptions}
+                        selected={industryFilter}
+                        onToggle={value => setIndustryFilter(prev => toggleListFilter(prev, value))}
+                        onClear={() => setIndustryFilter([])}
+                      />
+                    </FilterPopover>
+                  }
+                />
+                <SortableTh
+                  label="板块"
+                  sortKey="market"
+                  activeSortKey={sortKey}
+                  sortAsc={sortAsc}
+                  onSort={toggleSort}
+                  filter={
+                    <FilterPopover active={marketFilter.length > 0}>
+                      <MultiSelectFilter
+                        options={marketOptions}
+                        selected={marketFilter}
+                        onToggle={value => setMarketFilter(prev => toggleListFilter(prev, value))}
+                        onClear={() => setMarketFilter([])}
+                      />
+                    </FilterPopover>
+                  }
+                />
+                <SortableTh label="最新价 (后复权)" sortKey="price" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="日涨跌幅" sortKey="change" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="换手率" sortKey="turnover" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="成交额" sortKey="amount" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="市盈率 (TTM)" sortKey="pe_ttm" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} align="right" />
+                <SortableTh label="导入来源" sortKey="source" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} />
+                <SortableTh label="加入时间" sortKey="added_at" activeSortKey={sortKey} sortAsc={sortAsc} onSort={toggleSort} />
                 <th className="py-3 px-4 text-right">操作</th>
               </tr>
             </thead>
@@ -1066,7 +1288,8 @@ export const StockPoolView: React.FC<StockPoolViewProps> = ({
                 onClick={() => {
                   setShowStaleModal(false);
                   const staleSyms = (marketData?.stale_details || []).map((d: any) => d.symbol);
-                  if (staleSyms.length > 0) setSearchQuery(staleSyms[0]);
+                  const staleStock = stocks.find(s => s.symbol === staleSyms[0]);
+                  if (staleStock) setNameFilter(staleStock.name);
                 }}
                 className="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors"
               >
