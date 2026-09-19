@@ -13,6 +13,21 @@ from uuid import uuid4
 ARTIFACT_SCHEMA_VERSION = 3
 
 
+def _metric(value: Any, default: float | int | None = 0) -> float | int | None:
+    """Coerce an artifact metric to a number.
+
+    Metrics are stored as null when the sample is too small to compute them
+    (e.g. a rank-IC p value with fewer than two valid periods), so both a
+    missing key and an explicit null must fall back to ``default``. A gate
+    evaluated on such a default simply fails instead of raising.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number == number and number not in (float("inf"), float("-inf")) else default
+
+
 def assess_research_status(
     backtest: dict[str, Any] | None,
     validation: dict[str, Any] | None = None,
@@ -22,25 +37,26 @@ def assess_research_status(
     """Apply conservative gates; a score is never interpreted as probability."""
     bt = backtest or {}
     val = validation or {}
-    ic_low = bt.get("ic_confidence_low")
-    ic_passed = float(ic_low) > 0 if ic_low is not None else float(bt.get("ic_mean", 0)) > 0
+    ic_low = _metric(bt.get("ic_confidence_low"), default=None)
+    ic_passed = ic_low > 0 if ic_low is not None else _metric(bt.get("ic_mean")) > 0
+    periods = int(_metric(bt.get("periods")))
     core_checks = [
-        ("periods", int(bt.get("periods", 0)) >= 36, "至少需要36个非重叠样本外调仓期"),
-        ("excess_return", float(bt.get("cumulative_excess_return", 0)) > 0, "扣除成本后累计超额收益应为正"),
+        ("periods", periods >= 36, "至少需要36个非重叠样本外调仓期"),
+        ("excess_return", _metric(bt.get("cumulative_excess_return")) > 0, "扣除成本后累计超额收益应为正"),
         ("rank_ic", ic_passed, "Rank IC 的95%置信区间下界应为正"),
-        ("quantile_spread", float(bt.get("q5_q1_mean_return", 0)) > 0, "高分组相对低分组收益应为正"),
-        ("excess_win_rate", float(bt.get("excess_win_rate", 0)) > 0.5, "超额收益胜率应高于50%"),
-        ("validation_r2", float(val.get("r2", -1)) > 0, "验证集 R² 应为正"),
+        ("quantile_spread", _metric(bt.get("q5_q1_mean_return")) > 0, "高分组相对低分组收益应为正"),
+        ("excess_win_rate", _metric(bt.get("excess_win_rate")) > 0.5, "超额收益胜率应高于50%"),
+        ("validation_r2", _metric(val.get("r2"), -1) > 0, "验证集 R² 应为正"),
     ]
     robust_checks = [
-        ("subperiod_stability", float(bt.get("positive_year_ratio", 0)) >= 0.75,
+        ("subperiod_stability", _metric(bt.get("positive_year_ratio")) >= 0.75,
          "至少75%的年度子区间平均超额收益应为正"),
-        ("robust_sample", int(bt.get("periods", 0)) >= 60, "稳健通过至少需要60个非重叠样本外调仓期"),
-        ("simple_baselines", float(bt.get("best_simple_baseline_excess_return", -1)) > 0,
+        ("robust_sample", periods >= 60, "稳健通过至少需要60个非重叠样本外调仓期"),
+        ("simple_baselines", _metric(bt.get("best_simple_baseline_excess_return"), -1) > 0,
          "组合应跑赢仅模型评分、20日动量、60日动量和低波动基线"),
-        ("ic_significance", float(bt.get("ic_p_value_adjusted", bt.get("ic_p_value", 1.0))) < 0.05,
+        ("ic_significance", _metric(bt.get("ic_p_value_adjusted", bt.get("ic_p_value")), 1.0) < 0.05,
          "Rank IC 经多重检验校正后的 p 值应低于0.05"),
-        ("holding_valuation", int(bt.get("unresolved_holding_events", 0)) == 0,
+        ("holding_valuation", int(_metric(bt.get("unresolved_holding_events"))) == 0,
          "跌停、停牌或退市持仓必须具有可连续估值的后续行情"),
     ]
     checks = [*core_checks, *robust_checks]
@@ -52,7 +68,7 @@ def assess_research_status(
     failed = [message for _, passed, message in checks if not passed]
     core_passed = bool(bt) and all(passed for _, passed, _ in core_checks)
     robust_passed = core_passed and all(passed for _, passed, _ in robust_checks) and not warnings
-    if not bt or int(bt.get("periods", 0)) == 0:
+    if not bt or periods == 0:
         level, label = "not_validated", "未验证"
     elif not core_passed:
         level, label = "research_observation", "研究观察"

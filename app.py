@@ -577,6 +577,12 @@ def cn_area_chart(data, y_title: str, x_title: str | None = None, height: int = 
     _cn_chart(data, "area", y_title, x_title, height, y_format)
 
 
+def _numeric(value: object, default: float | None = 0) -> float | None:
+    """Coerce an artifact metric for gate evaluation, falling back on null/missing."""
+    number = pd.to_numeric(value, errors="coerce")
+    return default if pd.isna(number) else float(number)
+
+
 def _fmt_metric(value: object, kind: str = "number", digits: int = 2) -> str:
     number = pd.to_numeric(value, errors="coerce")
     if pd.isna(number):
@@ -587,20 +593,21 @@ def _fmt_metric(value: object, kind: str = "number", digits: int = 2) -> str:
 
 
 def backtest_gate_table(metrics: dict, validation: dict) -> pd.DataFrame:
-    ic_low = metrics.get("ic_confidence_low")
-    adjusted_p = metrics.get("ic_p_value_adjusted", metrics.get("ic_p_value"))
+    ic_low = _numeric(metrics.get("ic_confidence_low"), None)
+    adjusted_p = _numeric(metrics.get("ic_p_value_adjusted", metrics.get("ic_p_value")), None)
+    periods = _numeric(metrics.get("periods"))
     rows = [
-        ("核心", "样本外调仓期", metrics.get("periods"), "≥ 36期", int(metrics.get("periods", 0)) >= 36, "integer"),
-        ("核心", "扣费后累计超额", metrics.get("cumulative_excess_return"), "> 0%", float(metrics.get("cumulative_excess_return", 0)) > 0, "percent"),
-        ("核心", "Rank IC区间下限", ic_low, "> 0", ic_low is not None and float(ic_low) > 0, "number"),
-        ("核心", "Q5-Q1平均收益", metrics.get("q5_q1_mean_return"), "> 0%", float(metrics.get("q5_q1_mean_return", 0)) > 0, "percent"),
-        ("核心", "超额收益胜率", metrics.get("excess_win_rate"), "> 50%", float(metrics.get("excess_win_rate", 0)) > .5, "percent"),
-        ("核心", "验证集R²", validation.get("r2"), "> 0", float(validation.get("r2", -1)) > 0, "number"),
-        ("稳健", "正收益年度占比", metrics.get("positive_year_ratio"), "≥ 75%", float(metrics.get("positive_year_ratio", 0)) >= .75, "percent"),
-        ("稳健", "稳健样本量", metrics.get("periods"), "≥ 60期", int(metrics.get("periods", 0)) >= 60, "integer"),
-        ("稳健", "跑赢最强简单基线", metrics.get("best_simple_baseline_excess_return"), "> 0%", float(metrics.get("best_simple_baseline_excess_return", -1)) > 0, "percent"),
-        ("稳健", "校正后Rank IC p值", adjusted_p, "< 0.05", adjusted_p is not None and float(adjusted_p) < .05, "number"),
-        ("稳健", "无法连续估值事件", metrics.get("unresolved_holding_events"), "= 0次", int(metrics.get("unresolved_holding_events", 0)) == 0, "integer"),
+        ("核心", "样本外调仓期", metrics.get("periods"), "≥ 36期", int(periods) >= 36, "integer"),
+        ("核心", "扣费后累计超额", metrics.get("cumulative_excess_return"), "> 0%", _numeric(metrics.get("cumulative_excess_return")) > 0, "percent"),
+        ("核心", "Rank IC区间下限", ic_low, "> 0", ic_low is not None and ic_low > 0, "number"),
+        ("核心", "Q5-Q1平均收益", metrics.get("q5_q1_mean_return"), "> 0%", _numeric(metrics.get("q5_q1_mean_return")) > 0, "percent"),
+        ("核心", "超额收益胜率", metrics.get("excess_win_rate"), "> 50%", _numeric(metrics.get("excess_win_rate")) > .5, "percent"),
+        ("核心", "验证集R²", validation.get("r2"), "> 0", _numeric(validation.get("r2"), -1) > 0, "number"),
+        ("稳健", "正收益年度占比", metrics.get("positive_year_ratio"), "≥ 75%", _numeric(metrics.get("positive_year_ratio")) >= .75, "percent"),
+        ("稳健", "稳健样本量", metrics.get("periods"), "≥ 60期", int(periods) >= 60, "integer"),
+        ("稳健", "跑赢最强简单基线", metrics.get("best_simple_baseline_excess_return"), "> 0%", _numeric(metrics.get("best_simple_baseline_excess_return"), -1) > 0, "percent"),
+        ("稳健", "校正后Rank IC p值", adjusted_p, "< 0.05", adjusted_p is not None and adjusted_p < .05, "number"),
+        ("稳健", "无法连续估值事件", metrics.get("unresolved_holding_events"), "= 0次", int(_numeric(metrics.get("unresolved_holding_events"))) == 0, "integer"),
     ]
     records = []
     for level, item, value, threshold, passed, kind in rows:

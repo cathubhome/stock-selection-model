@@ -35,6 +35,29 @@ def test_validation_levels_distinguish_preliminary_and_robust():
     assert robust["passed"] is True
 
 
+def test_uncomputable_metrics_fail_gates_without_raising():
+    status = assess_research_status(
+        {
+            "periods": 60,
+            "cumulative_excess_return": 0.1,
+            "ic_mean": 0.05,
+            "ic_confidence_low": None,
+            "q5_q1_mean_return": 0.02,
+            "excess_win_rate": 0.6,
+            "positive_year_ratio": 0.8,
+            "best_simple_baseline_excess_return": 0.03,
+            "ic_p_value_adjusted": None,
+            "unresolved_holding_events": None,
+        },
+        {"r2": 0.02}, {"usable": True}, {"usable": True},
+    )
+    checks = {check["name"]: check["passed"] for check in status["checks"]}
+    assert checks["rank_ic"] is True
+    assert checks["ic_significance"] is False
+    assert checks["holding_valuation"] is True
+    assert status["status"] == "preliminary"
+
+
 def test_run_manifest_is_versioned_and_reloadable(tmp_path: Path):
     write_run_manifest(tmp_path, {"run_id": "run-1", "kind": "score", "config": {"top_k": 10}})
     loaded = load_manifest(tmp_path, "score")
